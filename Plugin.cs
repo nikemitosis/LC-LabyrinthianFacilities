@@ -33,7 +33,7 @@ public class Plugin : BaseUnityPlugin {
 		// LogDebug,LogInfo,LogMessage,LogWarning,LogError,LogFatal
 	// };
 	private const uint PROMOTE_LOG = 0;
-	public uint MIN_LOG = 1;
+	public static uint MIN_LOG = 1;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
