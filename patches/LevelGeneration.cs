@@ -1,4 +1,5 @@
 namespace LabyrinthianFacilities.Patches;
+using DgConversion;
 
 using System;
 
@@ -8,31 +9,29 @@ using DunGen;
 
 using Tile = LabyrinthianFacilities.Tile;
 
-// POTENTIAL ISSUE:
-// OnGenerationStatusChanged invoked even though we don't check what
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
 	
-	[HarmonyPatch(typeof(DungeonGenerator),"Generate")]
+	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		
 		Plugin.LogInfo("Custom Generate!");
 		var flow = new DungeonFlowConverter(__instance.DungeonFlow);
 		
-		MapHandler.Instance.NewMap(
+		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			__instance.ChosenSeed
-		);
+			0,// __instance.Seed,
+			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
+		));
 		
-		GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete);
 		return false;
 	}
 	
 	[HarmonyReversePatch]
-	[HarmonyPatch("Status",MethodType.Setter)]
-	public static void ChangeStatus(object instance, GenerationStatus value) {
+	[HarmonyPatch("ChangeStatus")]
+	public static void ChangeStatus(object instance, GenerationStatus status) {
 		throw new NotImplementedException("Reverse patch stub");
 	}
 }

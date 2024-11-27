@@ -1,5 +1,7 @@
 ﻿namespace LabyrinthianFacilities;
 
+using DgConversion;
+
 using System;
 using System.Collections;
 using System.Collections.Generic;
@@ -28,12 +30,8 @@ public class Plugin : BaseUnityPlugin {
 	
 	private static bool initializedAssets = false;
 	
-	private delegate void LogFunc(string message);
-	// private static readonly LogFunc[] Loggers = {
-		// LogDebug,LogInfo,LogMessage,LogWarning,LogError,LogFatal
-	// };
-	private const uint PROMOTE_LOG = 0;
-	public static uint MIN_LOG = 1;
+	private const uint PROMOTE_LOG = 1;
+	public static uint MIN_LOG = 0;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
@@ -65,7 +63,7 @@ public class Plugin : BaseUnityPlugin {
 			LogInfo(message);
 			return;
 		}
-		Logger.LogInfo(message);
+		Logger.LogDebug(message);
 	}
 	public static void LogInfo(string message) {
 		if (MIN_LOG > 1) return;
@@ -109,14 +107,13 @@ public class Plugin : BaseUnityPlugin {
 		
 		Plugin.LogInfo($"Creating Tiles");
 		foreach (DunGen.Tile tile in Resources.FindObjectsOfTypeAll(typeof(DunGen.Tile))) {
-			var newtile = tile.gameObject.AddComponent<Tile>();
-			newtile.TileInstantiatedEvent += DunGenConverter.InstantiationHandler;
+			var newtile = tile.gameObject.AddComponent<DTile>();
+			// newtile.TileInstantiatedEvent += DunGenConverter.InstantiationHandler;
 		}
 		
 		Plugin.LogInfo("Creating Doorways");
 		foreach (DunGen.Doorway doorway in Resources.FindObjectsOfTypeAll(typeof(DunGen.Doorway))) {
-			var newdoorway = doorway.gameObject.AddComponent<Doorway>();
-			newdoorway.InitFromDunGen(doorway);
+			var newdoorway = doorway.gameObject.AddComponent<DDoorway>();
 		}
 		
 		// Plugin.LogInfo("Creating Doors");
@@ -139,5 +136,71 @@ public class Plugin : BaseUnityPlugin {
 			if (t.gameObject.name == name) return t;
 		}
 		return null;
+	}
+}
+
+public class MapHandler : NetworkBehaviour {
+	public static MapHandler Instance {get; private set;}
+	internal static GameObject prefab = null;
+	
+	private Dictionary<SelectableLevel,GameMap> maps = null;
+	
+	public override void OnNetworkSpawn() {
+		if (Instance != null) return;
+		Instance = this;
+		
+		maps = new Dictionary<SelectableLevel,GameMap>();
+	}
+	
+	public static void TileInsertionFail(Tile t) {
+		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
+	}
+	
+	public GameMap NewMap(
+		SelectableLevel moon, 
+		GameMap.GenerationCompleteDelegate onComplete=null
+	) {
+		GameObject newmapobj;
+		GameMap newmap;
+		if (maps.TryGetValue(moon,out newmap)) {
+			Plugin.LogWarning(
+				"Attempted to generate new moon on moon that was already generated"
+			);
+			return null;
+		}
+		Plugin.LogInfo($"Generating new moon for {moon.name}!");
+		newmapobj = new GameObject($"map:{moon.name}");
+		newmapobj.transform.SetParent(this.gameObject.transform);
+		newmapobj.transform.position -= Vector3.up * 200.0f;
+		
+		newmap = newmapobj.AddComponent<GameMap>();
+		newmap.GenerationCompleteEvent += onComplete;
+		maps.Add(moon,newmap);
+		
+		newmap.TileInsertionEvent += MapHandler.TileInsertionFail;
+		
+		return newmap;
+	}
+	
+	public IEnumerator Generate(
+		SelectableLevel moon, 
+		ITileGenerator tilegen, 
+		int? seed=null,
+		GameMap.GenerationCompleteDelegate onComplete=null
+	) {
+		GameMap map = null; 
+		if (!maps.TryGetValue(moon,out map)) {
+			map = NewMap(moon);
+		}
+		Plugin.LogInfo($"Generating tiles for {moon.name}");
+		
+		map.GenerationCompleteEvent += onComplete;
+		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
+		yield return map.GenerateCoroutine(tilegen.Generator,seed);
+		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
+		map.GenerationCompleteEvent -= onComplete;
+		
+		// every indoor enemy *appears* to use agentId 0
+		map.GenerateNavMesh(agentId: 0);
 	}
 }

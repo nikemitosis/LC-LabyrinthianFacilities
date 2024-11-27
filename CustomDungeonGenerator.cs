@@ -7,72 +7,46 @@ using System.Collections;
 using System.Collections.Generic;
 
 using UnityEngine;
+using UnityEngine.AI;
 using Unity.Netcode;
 
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
 
-/*public abstract class Door : MonoBehaviour {
-	// Properties
-	public bool IsInUse {get;}
-	
-	// Private/Protected
-	protected (Doorway d1, Doorway d2) doorways;
-	
-	// Monobehaviour Stuff
-	public void Awake() {
-		this.doorways.d1 = null;
-		this.doorways.d2 = null;
-	}
-}
-
-public class Door<DoorState> : Door {
-	// Delegates & Events
-	public delegate void DoorMoveDelegate(Door<DoorState> door, DoorState open);
-	public event DoorMoveDelegate DoorMoveEvent;
-	
-	// Properties
-	public new bool IsInUse {get {return doorways.d1 != null && doorways.d2 != null;}}
-	
-	// Private/Proteced
-	protected DoorState state;
-	
-	// Native methods
-	public void DoorMove(DoorState state) {
-		this.state = state;
-		DoorMoveEvent?.Invoke(this,state);
-	}
-}*/
-
 public class Doorway : MonoBehaviour {
 	// Properties
 	public Tile Tile {get {return this.tile;}}
-	public Vector2 Size {get {return this.size;} set {this.size = value;}}
+	public Vector2 Size {get {return this.size;} protected set {this.size = value;}}
 	public bool IsVacant {get {return this.connection == null;}}
-	public bool Initialized {get {return this.initialized;}}
+	public bool Initialized {
+		get {return this.initialized;} 
+		protected set {this.initialized = value;}
+	}
 	
 	// Protected/Private
 	protected bool initialized;
 	protected Tile tile;
-	[SerializeField]
 	protected Vector2 size;
 	protected Doorway connection;
 	
-	// Monobehaviour Stuff
-	public void Awake() {
+	
+	// Native Stuff
+	public virtual void Initialize() {
+		if (this.Initialized) return;
+		this.Initialized = true;
+		
 		this.connection = null;
 		this.tile = this.GetComponentInParent<Tile>(includeInactive: true);
 		if (this.tile == null) {
-			Plugin.LogError("Doorway cannot find its parent tile");
+			throw new NullReferenceException("Doorway cannot find its parent tile");
 		}
 	}
 	
-	// Native Stuff
-	public bool Fits(Doorway other) {
+	public virtual bool Fits(Doorway other) {
 		return this.size == other.size;
 	}
 	
-	public void Connect(Doorway other) {
+	public virtual void Connect(Doorway other) {
 		if (!Fits(other)) {
 			throw new ArgumentException("Cannot connect doors that do not fit together");
 		}
@@ -80,38 +54,21 @@ public class Doorway : MonoBehaviour {
 		other.connection = this;
 	}
 	
-	public void FixRotation() {
-		Bounds bounds = Tile.BoundingBox;
-		RectFace[] faces = bounds.GetFaces();
-		
-		float lowest_dist = faces[0].bounds.SqrDistance(this.transform.position);
-		RectFace closest_face = faces[0];
-		for (uint i=2; i<6; i++) {
-			if (/* i == 1 || */ i == 4) continue;
-			float dist = faces[i].bounds.SqrDistance(this.transform.position);
-			if (dist < lowest_dist) {
-				lowest_dist = dist;
-				closest_face = faces[i];
-			}
-		}
-		this.transform.rotation = Quaternion.LookRotation(closest_face.perpindicular);
-	}
+	
 }
 
 public class Tile : MonoBehaviour {
 	// Delegates & Events
-	public delegate void TileInstantiatedEventDelegate(Tile tile);
-	public event TileInstantiatedEventDelegate TileInstantiatedEvent;
+	public delegate void TileReactionDelegate(Tile tile);
+	public event TileReactionDelegate TileInstantiatedEvent;
+	public event TileReactionDelegate OnMove;
+	public event TileReactionDelegate OnConnect;
+	
 	
 	// Properties
 	public bool Initialized {
 		get { return initialized; }
-		protected set {
-			initialized = value; 
-			if (initialized == false) {
-				Plugin.LogWarning($"Why did we uninitialize tile {this.gameObject}?");
-			}
-		}
+		protected set { initialized = value; }
 	}
 	
 	public bool HasLeafDoorway {
@@ -129,35 +86,44 @@ public class Tile : MonoBehaviour {
 		get {return this.doorways ??= this.GetComponentsInChildren<Doorway>();}
 	}
 	public Bounds BoundingBox {get {return this.bounding_box;}}
+	public GameMap Map {get {return this.GetComponentInParent<GameMap>();}}
+	
+	public NavMeshBuildSource[] Navigables {get {return this.navigables;}}
+	public NavMeshLinkData[] Links {get {return this.links;}}
 	
 	// Protected/Private
 	protected Doorway[] doorways = null;
 	protected Bounds bounding_box = new Bounds(Vector3.zero,Vector3.zero);
-	protected bool initialized = false;	
+	protected bool initialized = false;
+	
+	protected NavMeshBuildSource[] navigables = new NavMeshBuildSource[0];
+	protected NavMeshLinkData[] links = new NavMeshLinkData[0];
+	
 	
 	// Native Methods
 	public Tile Instantiate(Transform parent=null) {
-		
 		var newtile = GameObject.Instantiate(this.gameObject).GetComponent<Tile>();
 		newtile.bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 		
 		// rotation & position handled internally, do not inherit from parent
 		Vector3 diff = this.bounding_box.center - this.transform.position;
 		newtile.gameObject.transform.SetParent(parent,worldPositionStays: true);
-		newtile.bounding_box.center = newtile.gameObject.transform.position + diff;
+		newtile.bounding_box.center = newtile.transform.position + diff;
 		
 		newtile.gameObject.transform.rotation = Quaternion.LookRotation(Vector3.forward);
 		
+		newtile.Initialize();
 		TileInstantiatedEvent?.Invoke(newtile);
 		return newtile;
 	}
 	
-	public void Initialize(Bounds bounds) {
+	// Do placement-independent initializtion here (including bounds, since bounds are 
+	// affected by MoveTo and RotateBy
+	// Do *not* do navmesh stuff here
+	protected virtual void Initialize() {
 		if (initialized) return;
 		initialized = true;
-		
-		this.bounding_box = bounds;
-		this.bounding_box.FixExtents();
+		return;
 	}
 	
 	public bool Intersects(Tile other) {
@@ -166,15 +132,6 @@ public class Tile : MonoBehaviour {
 		this.bounding_box.extents -= Vector3.one*1/2; 
 		other.bounding_box.extents -= Vector3.one*1/2;
 		bool rt = this.bounding_box.Intersects(other.bounding_box);
-		
-		for (int i=0; i<3; i++) {
-			if (this.bounding_box.extents[i] < 0) {
-				Plugin.LogError($"Bad bounding box on {this}");
-			}
-			if (other.bounding_box.extents[i] < 0) {
-				Plugin.LogError($"Bad bounding box on {other}");
-			}
-		}
 		
 		//restore bounding boxes
 		this.bounding_box.extents += Vector3.one*1/2;
@@ -200,6 +157,8 @@ public class Tile : MonoBehaviour {
 		
 		this.bounding_box.center = pos;
 		this.transform.position = pos + diff;
+		
+		this.OnMove?.Invoke(this);
 	}
 	
 	public Tile PlaceAsRoot(Transform parent) {
@@ -211,8 +170,9 @@ public class Tile : MonoBehaviour {
 	
 	public Tile Place(int thisDoorwayIdx, Doorway other) {
 		if (thisDoorwayIdx >= this.Doorways.Length) {
-			Plugin.LogWarning($"Cannot find new tile's door; dropping... ({this.gameObject})");
-			return null;
+			throw new IndexOutOfRangeException(
+				$"Door index of new tile out of range. Tried to select idx {thisDoorwayIdx} with only {this.Doorways.Length} doors. "
+			);
 		}
 		
 		var tile = this.Instantiate(parent: other.gameObject.transform);
@@ -235,16 +195,13 @@ public class Tile : MonoBehaviour {
 		);
 		foreach (Tile t in tile.GetComponentInParent<GameMap>().GetComponentsInChildren<Tile>()) {
 			if (tile.Intersects(t) && !object.ReferenceEquals(t,tile)) {
-				Plugin.LogDebug($"Tile {tile.gameObject.name} would collide with {t.gameObject.name}");
-				Plugin.LogDebug($"Connector: \t{tile.GetComponentInParent<Tile>().gameObject.name}");
-				Plugin.LogDebug($"OtherBounds\t{t.BoundingBox}");
-				Plugin.LogDebug($"TileBounds \t{tile.BoundingBox}");
 				tile.transform.SetParent(null);
 				GameObject.Destroy(tile.gameObject);
 				return null;
 			}
 		}
 		thisDoorway.Connect(other);
+		this.OnConnect?.Invoke(this);
 		return tile;
 	}
 }
@@ -254,8 +211,12 @@ public class GameMap : MonoBehaviour {
 	// Delegates & Events
 	public delegate IEnumerable<Tile> TileGenerator(GameMap gamemap);
 	
-	public delegate void TileInsertionFailDelegate(GameMap map,Tile tile);
-	public event TileInsertionFailDelegate TileInsertionFailEvent;
+	// In the event of a failed insertion, tile is null 
+	public delegate void TileInsertionDelegate(Tile tile);
+	public event TileInsertionDelegate TileInsertionEvent;
+	
+	public delegate void GenerationCompleteDelegate(GameMap map);
+	public event GenerationCompleteDelegate GenerationCompleteEvent;
 	
 	// Properties
 	public Tile RootTile {
@@ -273,37 +234,39 @@ public class GameMap : MonoBehaviour {
 	
 	
 	// Protected/Private
-	protected GameObject rootObj;
 	protected Tile rootTile;
 	
 	protected Dictionary<Vector2,List<Doorway>> leaves;
 	protected uint MAX_ATTEMPTS=5;
+	protected NavMeshDataInstance navmesh;
+	protected List<NavMeshLinkInstance> links;
 	
 	private int _seed;
 	public Random rng {get; private set; }
 	
 	// MonoBehaviour Stuff
-	public virtual void Awake() {
+	protected virtual void Awake() {
 		this.rootTile = null;
 		this.leaves = new Dictionary<Vector2,List<Doorway>>();
 		this.rng = new Random(Environment.TickCount);
+		this.links = new List<NavMeshLinkInstance>();
+	}
+	
+	protected virtual void OnDestroy() {
+		NavMesh.RemoveNavMeshData(navmesh);
 	}
 	
 	// Native Methods
-	public IEnumerator GenerateCoroutine(TileGenerator tileGen,int? seed=null) {
+	public virtual IEnumerator GenerateCoroutine(TileGenerator tileGen, int? seed=null) {
 		
 		if (seed != null) this.Seed = (int)seed;
-		Plugin.LogInfo($"Seed: {Seed}");
 		
 		foreach (Tile tile in tileGen(this)) {
-			Plugin.LogInfo($"Attempting to insert tile {tile}..");
-			if (!this.AddTile(tile)) {
-				this.TileInsertionFailEvent?.Invoke(this,tile);
-			}
-			// yield return null;
+			this.TileInsertionEvent?.Invoke(this.AddTile(tile));
+			yield return null;
 			// yield return Plugin.DebugWait();
 		}
-		yield break;
+		GenerationCompleteEvent?.Invoke(this);
 	}
 	
 	public void AddLeaf(Doorway d) {
@@ -317,18 +280,17 @@ public class GameMap : MonoBehaviour {
 		}
 	}
 	
-	public bool AddTile(Tile tile) {
+	public virtual Tile AddTile(Tile tile) {
 		if (RootTile == null) {
-			Plugin.LogInfo($"Placing root tile '{tile.gameObject}'");
 			this.RootTile = tile.PlaceAsRoot(this.gameObject.transform);
 			foreach (Doorway d in this.RootTile.Doorways) {
 				AddLeaf(d);
 			}
-			return true;
+			return RootTile;
 		}
 		
 		List<Doorway> leafset = null;
-		int leafIdx = 0; // List indices cant be uint T_T
+		int leafIdx = 0;
 		
 		Tile newTile = null;
 		int newTileTargetDoorwayIdx = 0;
@@ -339,7 +301,6 @@ public class GameMap : MonoBehaviour {
 			Vector2 newTileTargetDoorwaySize = tile.Doorways[newTileTargetDoorwayIdx].Size;
 			
 			if (!this.leaves.TryGetValue(newTileTargetDoorwaySize,out leafset)) {
-				Plugin.LogInfo($"Door size not present in leaves: {newTileTargetDoorwaySize}");
 				continue;
 			}
 			leafIdx = rng.Next(leafset.Count);
@@ -351,8 +312,7 @@ public class GameMap : MonoBehaviour {
 				break;
 			}
 		} if (forElse) {
-			Plugin.LogWarning("Exceeded maximum number of attempts in GameMap.AddTile");
-			return false;
+			return null;
 		}
 		
 		leafset.RemoveAt(leafIdx);
@@ -362,6 +322,38 @@ public class GameMap : MonoBehaviour {
 			}
 		}
 		
-		return true;
+		return newTile;
+	}
+	
+	public void GenerateNavMesh(int agentId) {
+		// Clear old data
+		NavMesh.RemoveNavMeshData(this.navmesh);
+		foreach (var link in this.links) {
+			NavMesh.RemoveLink(link);
+		}
+		links.Clear();
+		
+		Plugin.LogFatal($"Gathering Sources");
+		List<NavMeshBuildSource> sources = new();
+		foreach (Tile t in this.GetComponentsInChildren<Tile>()) {
+			sources.AddRange(t.Navigables);
+			foreach (NavMeshLinkData link in t.Links) {
+				this.links.Add(NavMesh.AddLink(link));
+			}
+		}
+		Plugin.LogFatal($"Found {sources.Count} sources");
+		Plugin.LogFatal($"Found {links.Count} links");
+		
+		Plugin.LogFatal($"Building Navmesh for agent {agentId}");
+		var navmeshdata = NavMeshBuilder.BuildNavMeshData(
+			NavMesh.GetSettingsByID(agentId),
+			sources,
+			new Bounds(Vector3.zero,Vector3.one * float.PositiveInfinity),
+			transform.position,
+			transform.rotation
+		);
+		this.navmesh = NavMesh.AddNavMeshData(navmeshdata);
+		this.navmesh.owner = this;
+		Plugin.LogFatal($"Mesh Built");
 	}
 }
