@@ -107,21 +107,20 @@ public class Plugin : BaseUnityPlugin {
 		
 		Plugin.LogInfo($"Creating Tiles");
 		foreach (DunGen.Tile tile in Resources.FindObjectsOfTypeAll(typeof(DunGen.Tile))) {
-			var newtile = tile.gameObject.AddComponent<DTile>();
-			// newtile.TileInstantiatedEvent += DunGenConverter.InstantiationHandler;
+			tile.gameObject.AddComponent<DTile>();
 		}
 		
 		Plugin.LogInfo("Creating Doorways");
 		foreach (DunGen.Doorway doorway in Resources.FindObjectsOfTypeAll(typeof(DunGen.Doorway))) {
-			var newdoorway = doorway.gameObject.AddComponent<DDoorway>();
+			doorway.gameObject.AddComponent<DDoorway>();
 		}
 		
-		// Plugin.LogInfo("Creating Doors");
-		// foreach (DunGen.Door door in Resources.FindObjectsOfTypeAll(typeof(DunGen.Door))) {
-			// Plugin.LogInfo($"Adding Door for '{door.gameObject}'");
-			// var newdoor = door.gameObject.AddComponent<Door<bool>>();
-			// newdoor.InitFromDunGen(door);
-		// }
+		Plugin.LogInfo("Creating Scrap");
+		foreach (GrabbableObject scrap in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
+			if (scrap.itemProperties.isScrap) {
+				scrap.gameObject.AddComponent<Scrap>();
+			}
+		}
 	}
 	
 	
@@ -143,25 +142,40 @@ public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
-	private Dictionary<SelectableLevel,GameMap> maps = null;
+	private Dictionary<SelectableLevel,DGameMap> maps = null;
+	private DGameMap activeMap = null;
+	
+	public DGameMap ActiveMap {get {return activeMap;}}
 	
 	public override void OnNetworkSpawn() {
-		if (Instance != null) return;
+		if (Instance != null) {
+			this.GetComponent<NetworkObject>().Despawn(true);
+			return;
+		}
 		Instance = this;
-		
-		maps = new Dictionary<SelectableLevel,GameMap>();
+		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
+		maps = new Dictionary<SelectableLevel,DGameMap>();
+	}
+	public override void OnNetworkDespawn() {
+		MapHandler.Instance = null;
+		GameObject.Destroy(this.gameObject);
+	}
+	
+	public static void OnDisconnect(bool isHost) {
+		Plugin.LogInfo($"Disconnecting: Destroying local instance of MapHandler");
+		Instance.OnNetworkDespawn();
 	}
 	
 	public static void TileInsertionFail(Tile t) {
 		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
 	}
 	
-	public GameMap NewMap(
+	public DGameMap NewMap(
 		SelectableLevel moon, 
 		GameMap.GenerationCompleteDelegate onComplete=null
 	) {
 		GameObject newmapobj;
-		GameMap newmap;
+		DGameMap newmap;
 		if (maps.TryGetValue(moon,out newmap)) {
 			Plugin.LogWarning(
 				"Attempted to generate new moon on moon that was already generated"
@@ -173,7 +187,7 @@ public class MapHandler : NetworkBehaviour {
 		newmapobj.transform.SetParent(this.gameObject.transform);
 		newmapobj.transform.position -= Vector3.up * 200.0f;
 		
-		newmap = newmapobj.AddComponent<GameMap>();
+		newmap = newmapobj.AddComponent<DGameMap>();
 		newmap.GenerationCompleteEvent += onComplete;
 		maps.Add(moon,newmap);
 		
@@ -188,19 +202,65 @@ public class MapHandler : NetworkBehaviour {
 		int? seed=null,
 		GameMap.GenerationCompleteDelegate onComplete=null
 	) {
-		GameMap map = null; 
+		if (this.activeMap != null) this.activeMap.gameObject.SetActive(false);
+		
+		DGameMap map = null; 
 		if (!maps.TryGetValue(moon,out map)) {
 			map = NewMap(moon);
 		}
 		Plugin.LogInfo($"Generating tiles for {moon.name}");
+		map.gameObject.SetActive(true);
+		this.activeMap = map;
 		
 		map.GenerationCompleteEvent += onComplete;
 		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
-		yield return map.GenerateCoroutine(tilegen.Generator,seed);
+		yield return map.GenerateCoroutine(tilegen,seed);
 		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
 		map.GenerationCompleteEvent -= onComplete;
 		
 		// every indoor enemy *appears* to use agentId 0
 		map.GenerateNavMesh(agentId: 0);
+	}
+	
+	// Stop RoundManager from deleting scrap at the end of the day by hiding it
+	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
+	public void PreserveScrap() {
+		Plugin.LogFatal($"{this} Preserve");
+		this.activeMap.PreserveScrap();
+	}
+}
+
+
+public class Scrap : MonoBehaviour {
+	
+	public GrabbableObject Grabbable {get {return this.GetComponent<GrabbableObject>();}}
+	
+	public void FindParent() {
+		if (this.Grabbable.isInShipRoom) return;
+		
+		bool noparentfound = true;
+		foreach (Tile t in MapHandler.Instance.ActiveMap.GetComponentsInChildren<Tile>()) {
+			if (t.BoundingBox.Contains(this.transform.position)) {
+				this.transform.parent = t.transform;
+				noparentfound = false; break;
+			}
+		} if (noparentfound) {
+			this.transform.parent = MapHandler.Instance.ActiveMap.transform;
+		}
+		Plugin.LogFatal($"{this} Parent: {this.transform.parent}");
+		this.Grabbable.targetFloorPosition 
+			= this.Grabbable.startFallingPosition 
+			= this.transform.localPosition;
+	}
+	
+	public void Preserve() {
+		this.FindParent();
+		Plugin.LogFatal($"{this}: Preserve");
+		this.gameObject.SetActive(false);
+	}
+	
+	public void Restore() {
+		Plugin.LogFatal($"{this}: Restore");
+		this.gameObject.SetActive(true);
 	}
 }

@@ -48,7 +48,9 @@ public class Doorway : MonoBehaviour {
 	
 	public virtual void Connect(Doorway other) {
 		if (!Fits(other)) {
-			throw new ArgumentException("Cannot connect doors that do not fit together");
+			string msg = "Cannot connect doors that do not fit together\n"
+				+ $"\t(Tiles {this.Tile} & {other.Tile})";
+			throw new ArgumentException(msg);
 		}
 		this.connection = other;
 		other.connection = this;
@@ -206,10 +208,46 @@ public class Tile : MonoBehaviour {
 	}
 }
 
+public struct PlacementInfo {
+	private Tile newtile;
+	private int newDoorwayIdx;
+	private Doorway attachmentPoint;
+	
+	public Tile NewTile {get {return newtile;} set {newtile = value;}}
+	public int NewDoorwayIdx {
+		get {
+			return newDoorwayIdx;
+		} set {
+			// should have a bounds check here
+			newDoorwayIdx = value;
+		}
+	}
+	public Doorway AttachmentPoint {
+		get {
+			return attachmentPoint;
+		} set {
+			attachmentPoint = value;
+		}
+	}
+	
+	public PlacementInfo(Tile nt, int ndi=0, Doorway ap=null) {
+		newtile = nt;
+		newDoorwayIdx = ndi;
+		attachmentPoint = ap;
+	}
+}
+
+public interface ITileGenerator {
+	public IEnumerable<PlacementInfo> Generator(GameMap map);
+	
+	public void FailedPlacementHandler(Tile tile) {
+		return;
+	}
+}
+
 public class GameMap : MonoBehaviour {
 	
 	// Delegates & Events
-	public delegate IEnumerable<Tile> TileGenerator(GameMap gamemap);
 	
 	// In the event of a failed insertion, tile is null 
 	public delegate void TileInsertionDelegate(Tile tile);
@@ -236,8 +274,8 @@ public class GameMap : MonoBehaviour {
 	// Protected/Private
 	protected Tile rootTile;
 	
-	protected Dictionary<Vector2,List<Doorway>> leaves;
-	protected uint MAX_ATTEMPTS=5;
+	private Dictionary<Vector2,List<Doorway>> leaves;
+	private int numLeaves = 0;
 	protected NavMeshDataInstance navmesh;
 	protected List<NavMeshLinkInstance> links;
 	
@@ -257,16 +295,40 @@ public class GameMap : MonoBehaviour {
 	}
 	
 	// Native Methods
-	public virtual IEnumerator GenerateCoroutine(TileGenerator tileGen, int? seed=null) {
+	public virtual IEnumerator GenerateCoroutine(ITileGenerator tileGen, int? seed=null) {
 		
 		if (seed != null) this.Seed = (int)seed;
 		
-		foreach (Tile tile in tileGen(this)) {
-			this.TileInsertionEvent?.Invoke(this.AddTile(tile));
+		foreach (PlacementInfo placement in tileGen.Generator(this)) {
+			this.TileInsertionEvent?.Invoke(this.AddTile(placement));
 			yield return null;
 			// yield return Plugin.DebugWait();
 		}
 		GenerationCompleteEvent?.Invoke(this);
+	}
+	
+	public Doorway GetLeaf(Vector2? size=null, int? idxn=null) {
+		if (numLeaves == 0) return null;
+		if (idxn != null && (int)idxn >= numLeaves) {
+			throw new ArgumentOutOfRangeException("idx >= number of leaves");
+		}
+		
+		if (size == null) {
+			int idx = idxn ?? this.rng.Next(numLeaves);
+			
+			//order not guaranteed...
+			foreach (var kvpair in this.leaves) {
+				if (idx < kvpair.Value.Count) return kvpair.Value[idx];
+				idx -= kvpair.Value.Count;
+			}
+			throw new SystemException("numLeaves is incorrect!");
+		} else {
+			List<Doorway> ds;
+			if (!this.leaves.TryGetValue((Vector2)size,out ds)) return null;
+			
+			int idx = idxn ?? this.rng.Next(ds.Count);
+			return ds[idx];
+		}
 	}
 	
 	public void AddLeaf(Doorway d) {
@@ -278,9 +340,11 @@ public class GameMap : MonoBehaviour {
 			leaf.Add(d);
 			this.leaves.Add(d.Size,leaf);
 		}
+		numLeaves++;
 	}
 	
-	public virtual Tile AddTile(Tile tile) {
+	public virtual Tile AddTile(PlacementInfo placement) {
+		Tile tile = placement.NewTile;
 		if (RootTile == null) {
 			this.RootTile = tile.PlaceAsRoot(this.gameObject.transform);
 			foreach (Doorway d in this.RootTile.Doorways) {
@@ -290,32 +354,21 @@ public class GameMap : MonoBehaviour {
 		}
 		
 		List<Doorway> leafset = null;
-		int leafIdx = 0;
+		Doorway leaf = placement.AttachmentPoint;
 		
 		Tile newTile = null;
-		int newTileTargetDoorwayIdx = 0;
+		int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
+		Vector2 newTileTargetDoorwaySize = tile.Doorways[newTileTargetDoorwayIdx].Size;
 		
-		bool forElse = true;
-		for (uint i=0; i<MAX_ATTEMPTS; i++) {
-			newTileTargetDoorwayIdx = rng.Next(tile.Doorways.Length);
-			Vector2 newTileTargetDoorwaySize = tile.Doorways[newTileTargetDoorwayIdx].Size;
-			
-			if (!this.leaves.TryGetValue(newTileTargetDoorwaySize,out leafset)) {
-				continue;
-			}
-			leafIdx = rng.Next(leafset.Count);
-			
-			newTile = tile.Place(newTileTargetDoorwayIdx,leafset[leafIdx]);
-			
-			if (newTile != null) {
-				forElse = false;
-				break;
-			}
-		} if (forElse) {
+		if (!this.leaves.TryGetValue(newTileTargetDoorwaySize,out leafset)) {
 			return null;
 		}
+			
+		newTile = tile.Place(newTileTargetDoorwayIdx,leaf);
+		if (newTile == null) return null;
 		
-		leafset.RemoveAt(leafIdx);
+		leafset.Remove(leaf);
+		numLeaves--;
 		for (int i=0; i<newTile.Doorways.Length; i++) {
 			if (i != newTileTargetDoorwayIdx) {
 				this.AddLeaf(newTile.Doorways[i]);
@@ -333,7 +386,6 @@ public class GameMap : MonoBehaviour {
 		}
 		links.Clear();
 		
-		Plugin.LogFatal($"Gathering Sources");
 		List<NavMeshBuildSource> sources = new();
 		foreach (Tile t in this.GetComponentsInChildren<Tile>()) {
 			sources.AddRange(t.Navigables);
@@ -341,10 +393,7 @@ public class GameMap : MonoBehaviour {
 				this.links.Add(NavMesh.AddLink(link));
 			}
 		}
-		Plugin.LogFatal($"Found {sources.Count} sources");
-		Plugin.LogFatal($"Found {links.Count} links");
 		
-		Plugin.LogFatal($"Building Navmesh for agent {agentId}");
 		var navmeshdata = NavMeshBuilder.BuildNavMeshData(
 			NavMesh.GetSettingsByID(agentId),
 			sources,
@@ -354,6 +403,5 @@ public class GameMap : MonoBehaviour {
 		);
 		this.navmesh = NavMesh.AddNavMeshData(navmeshdata);
 		this.navmesh.owner = this;
-		Plugin.LogFatal($"Mesh Built");
 	}
 }

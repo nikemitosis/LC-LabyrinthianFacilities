@@ -14,7 +14,7 @@ using DunGen.Graph;
 
 using Random = System.Random;
 
-class DDoorway : Doorway {
+public class DDoorway : Doorway {
 	// Properties
 	public bool IsBossDoor {get {return this.currentlyActiveRandomObject == null;}}
 	
@@ -162,13 +162,14 @@ class DDoorway : Doorway {
 	}
 }
 
-class DTile : Tile {
+public class DTile : Tile {
 	// Properties
 	internal DunGen.GlobalProp[] GlobalProps {get {return globalProps;}}
 	
 	// Protected/Private
 	protected DunGen.LocalPropSet[] localProps;
 	protected DunGen.GlobalProp[] globalProps;
+	protected List<GrabbableObject> ownedObjects;
 	
 	// Private Helper Methods
 	private Bounds DeriveBounds() {
@@ -284,7 +285,6 @@ class DTile : Tile {
 		
 		// Plugin.LogDebug("Initializing Navigation");
 		this.Map.GenerationCompleteEvent += this.InitNavStuff;
-		// this.InitNavStuff();
 	}
 	
 	// Native Methods
@@ -335,74 +335,20 @@ class DTile : Tile {
 	}
 }
 
-public interface ITileGenerator {
-	public IEnumerable<Tile> Generator(GameMap map);
-	
-	public void FailedPlacementHandler(Tile tile) {
-		return;
-	}
-}
-
-public class DungeonFlowConverter : ITileGenerator {
-	private DunGen.Graph.DungeonFlow flow;
-	private uint tile_demand;
-	
+public class DGameMap : GameMap {
 	protected Dictionary<int, List<DunGen.GlobalProp>> globalPropSpawns;
 	protected Dictionary<int, List<DunGen.GlobalProp>> activeGlobalProps;
 	
-	public void FailedPlacementHandler(Tile tile) {
-		if (tile == null) this.tile_demand++;
-	}
-	
-	public DungeonFlowConverter(DungeonFlow flow) {
-		this.flow = flow;
-		this.tile_demand = 30;
-		
+	// Constructors/Initialization
+	public DGameMap() {
 		this.globalPropSpawns = new();
 		this.activeGlobalProps = new();
-	}
-	
-	public IEnumerable<Tile> Generator(GameMap map) {
-		// if (map.RootTile == null) {
-			map.GenerationCompleteEvent += HandleGlobalProps;
-			map.TileInsertionEvent += RegisterTileProps;
-			
-			Tile start = flow?.Lines[0]
-				?.DungeonArchetypes[0]
-				?.TileSets[0]
-				?.TileWeights
-				?.Weights[0]
-				?.Value
-				?.GetComponent<Tile>();
-			
-			if (start == null) {
-				Plugin.LogError("Start tile not found D:");
-				yield break;
-			}
-			Plugin.LogDebug($"{this.tile_demand}: Using '{start.gameObject.name}' as start room");
-			
-			yield return start;
-			this.tile_demand--;
-		// }
 		
-		Tile rt;
-		while (tile_demand > 0) {
-			var lines = flow?.Lines;
-			var archetypes = lines?[map.rng.Next(lines.Count)]?.DungeonArchetypes;
-			var tilesets = archetypes?[map.rng.Next(archetypes.Count)].TileSets;
-			var weights = tilesets?[map.rng.Next(tilesets.Count)]?.TileWeights?.Weights;
-			rt = weights[map.rng.Next(weights.Count)]?.Value?.GetComponent<Tile>();
-			if (rt != start) {
-				Plugin.LogDebug($"{this.tile_demand}: Yielding '{rt.gameObject.name}'");
-				this.tile_demand--;
-				yield return rt;
-			}
-		}
-		Plugin.LogInfo($"Done Generating Tiles!");
+		this.TileInsertionEvent += RegisterTileProps;
+		this.GenerationCompleteEvent += this.RestoreScrap;
 	}
 	
-	
-	
+	// Native Methods
 	private void AddProp(DunGen.GlobalProp p) {
 		List<DunGen.GlobalProp> propList = null;
 		if (!globalPropSpawns.TryGetValue(p.PropGroupID,out propList)) {
@@ -412,8 +358,8 @@ public class DungeonFlowConverter : ITileGenerator {
 		propList.Add(p);
 	}
 	
-	private (int min,int max) GetPropRange(int id) {
-		foreach (var settings in this.flow.GlobalProps) {
+	private (int min,int max) GetPropRange(DunGen.Graph.DungeonFlow flow, int id) {
+		foreach (var settings in flow.GlobalProps) {
 			if (settings.ID == id) return (settings.Count.Min,settings.Count.Max);
 		}
 		Plugin.LogError($"Global Prop bounds not found for id {id}");
@@ -430,7 +376,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		}
 	}
 	
-	protected void HandleGlobalProps(GameMap map) {
+	protected void HandleGlobalProps(DunGen.Graph.DungeonFlow flow) {
 		foreach (var entry in globalPropSpawns) {
 			int id = entry.Key;
 			var options = entry.Value;
@@ -441,11 +387,11 @@ public class DungeonFlowConverter : ITileGenerator {
 			}
 			activeGlobalProps[id] = new();
 			
-			(int min,int max) = GetPropRange(id);
-			int count = map.rng.Next(min,max);
+			(int min,int max) = GetPropRange(flow,id);
+			int count = this.rng.Next(min,max);
 			for (int i=0; i<count; i++) {
 				if (options.Count == 0) break;
-				int idx = map.rng.Next(options.Count);
+				int idx = this.rng.Next(options.Count);
 				var prop = options[idx];
 				options.RemoveAt(idx);
 				prop.gameObject.SetActive(true);
@@ -453,4 +399,154 @@ public class DungeonFlowConverter : ITileGenerator {
 			}
 		}
 	}
+	
+	public override IEnumerator GenerateCoroutine(ITileGenerator tilegen, int? seed) {
+		var dtilegen = (DungeonFlowConverter)tilegen;
+		var foo = (GameMap.GenerationCompleteDelegate)(
+			(GameMap m) => HandleGlobalProps(dtilegen.Flow)
+		);
+		this.GenerationCompleteEvent += foo;
+		yield return StartCoroutine(base.GenerateCoroutine(tilegen,seed));
+		this.GenerationCompleteEvent -= foo;
+	}
+	
+	public void PreserveScrap() {
+		Plugin.LogFatal($"{this} Preserve");
+		foreach (Scrap obj in GameObject.FindObjectsByType<Scrap>(FindObjectsSortMode.None)) {
+			Plugin.LogFatal($"{obj} Preserve");
+			obj.Preserve();
+		}
+	}
+	
+	public void RestoreScrap(GameMap m) {
+		foreach (Scrap obj in this.GetComponentsInChildren<Scrap>(includeInactive: true)) {
+			obj.Restore();
+		}
+	}
+}
+
+public class DungeonFlowConverter : ITileGenerator {
+	protected DunGen.Graph.DungeonFlow flow;
+	protected uint tile_demand;
+	
+	protected List<(DTile tile,float weight)> tile_freqs;
+	
+	protected float freq_range;
+	
+	// max attempts to place each given tile
+	// NOT the max attempts to place any tile; if a tile fails to place within MAX_ATTEMPTS, a new tile
+	// is chosen
+	private const int MAX_ATTEMPTS=10;
+	
+	public DunGen.Graph.DungeonFlow Flow {get {return flow;}}
+	
+	public DungeonFlowConverter(DungeonFlow flow) {
+		this.flow = flow;
+		this.tile_demand = 30;
+		
+		freq_range = 0.0f;
+		this.tile_freqs = new();
+		// Note that nodes arent included here... for now(?)
+		foreach (var line in flow.Lines) {
+			float line_freq = line.Length;
+			float arch_freq = 1.0f / line.DungeonArchetypes.Count;
+			foreach (var archetype in line.DungeonArchetypes) {
+				float tset_freq = 1.0f / archetype.TileSets.Count;
+				foreach (var tileset in archetype.TileSets) {
+					foreach (var tile in tileset.TileWeights.Weights) {
+						float tile_freq = (tile.MainPathWeight + tile.BranchPathWeight) / 2.0f;
+						DTile dtile = tile.Value.GetComponent<DTile>();
+						if (dtile == null) {
+							Plugin.LogError("Bad dtile");
+							Plugin.LogError($"{flow}");
+							Plugin.LogError($"{line}");
+							Plugin.LogError($"{archetype}");
+							Plugin.LogError($"{tileset}");
+							Plugin.LogError($"{tile}");
+							Plugin.LogError($"{tile.Value}");
+							Plugin.LogError("");
+						}
+						
+						float freq = line_freq * arch_freq * tset_freq * tile_freq;
+						
+						tile_freqs.Add((dtile,freq));
+						freq_range += freq;
+					}
+				}
+			}
+		}
+	}
+	
+	public void FailedPlacementHandler(Tile tile) {
+		if (tile == null) this.tile_demand++;
+	}
+	
+	public IEnumerable<PlacementInfo> Generator(GameMap map) {
+		DunGen.Graph.GraphNode node = null;
+		foreach (var n in flow.Nodes) {
+			if (n.NodeType == DunGen.Graph.NodeType.Start) {node = n; break;}
+		}
+		Tile start = node
+			?.TileSets[0]
+			?.TileWeights
+			?.Weights[0]
+			?.Value
+			?.GetComponent<Tile>();
+		
+		if (map.RootTile == null) {
+			if (start == null) {
+				Plugin.LogError("Start tile not found D:");
+				yield break;
+			}
+			Plugin.LogDebug($"{this.tile_demand}: Using '{start.gameObject.name}' as start room");
+			
+			yield return new PlacementInfo(start);
+			this.tile_demand--;
+		}
+		
+		PlacementInfo rt = new PlacementInfo();
+		while (tile_demand > 0) {
+			bool factoryStartRoomExists = map.transform.Find(
+				"ElevatorConnector(Clone)/ElevatorDoorway/StartRoom(Clone)"
+			);
+			do {
+				int i = -1;
+				float rand_point = (float)(this.freq_range * map.rng.NextDouble());
+				while (rand_point > 0) {
+					i++;
+					rand_point -= this.tile_freqs[i].weight;
+				}
+				rt.NewTile = this.tile_freqs[i].tile;
+			} while (
+				rt.NewTile == start 
+				|| (
+					factoryStartRoomExists
+					&& rt.NewTile.gameObject.name == "StartRoom"
+				)
+			);
+			// RHS of condition is temporary fix to stop start room from spawning multiple times
+			// since it *technically* isn't the start room in the factory layout
+			// This won't be necessary if we enforce the rule that certain rooms can only spawn once 
+			// in a map, but I'm still a little unsure if I actually want to use that rule, since maps
+			// will often be larger than in vanilla in order to keep them more interesting. 
+			
+			bool forelse = true;
+			for (int i=0; i<MAX_ATTEMPTS; i++) {
+				rt.NewDoorwayIdx = map.rng.Next(rt.NewTile.Doorways.Length);
+				rt.AttachmentPoint = map.GetLeaf(rt.NewTile.Doorways[rt.NewDoorwayIdx].Size);
+				if (rt.AttachmentPoint != null) {
+					Plugin.LogMessage($"Size connections: {rt.NewTile?.Doorways?[rt.NewDoorwayIdx]?.Size} - {rt.AttachmentPoint?.Size}");
+					forelse = false; break;
+				}
+			} if (forelse) {
+				continue;
+			}
+			
+			Plugin.LogDebug($"{this.tile_demand}: Yielding '{rt.NewTile.gameObject.name}'");
+			this.tile_demand--;
+			yield return rt;
+		}
+		Plugin.LogInfo($"Done Generating Tiles!");
+	}
+	
 }
