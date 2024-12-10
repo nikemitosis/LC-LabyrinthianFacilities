@@ -411,9 +411,7 @@ public class DGameMap : GameMap {
 	}
 	
 	public void PreserveScrap() {
-		Plugin.LogFatal($"{this} Preserve");
 		foreach (Scrap obj in GameObject.FindObjectsByType<Scrap>(FindObjectsSortMode.None)) {
-			Plugin.LogFatal($"{obj} Preserve");
 			obj.Preserve();
 		}
 	}
@@ -434,8 +432,8 @@ public class DungeonFlowConverter : ITileGenerator {
 	protected float freq_range;
 	
 	// max attempts to place each given tile
-	// NOT the max attempts to place any tile; if a tile fails to place within MAX_ATTEMPTS, a new tile
-	// is chosen
+	// NOT the max attempts to place any tile. 
+	//   i.e. if a tile fails to place within MAX_ATTEMPTS, a new tile is chosen
 	private const int MAX_ATTEMPTS=10;
 	
 	public DunGen.Graph.DungeonFlow Flow {get {return flow;}}

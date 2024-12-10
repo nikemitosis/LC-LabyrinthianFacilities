@@ -8,6 +8,7 @@ using System.Collections.Generic;
 
 using UnityEngine;
 using UnityEngine.AI;
+using Unity.AI.Navigation;
 using Unity.Netcode;
 
 // Ambiguity between System.Random and UnityEngine.Random
@@ -276,8 +277,7 @@ public class GameMap : MonoBehaviour {
 	
 	private Dictionary<Vector2,List<Doorway>> leaves;
 	private int numLeaves = 0;
-	protected NavMeshDataInstance navmesh;
-	protected List<NavMeshLinkInstance> links;
+	protected NavMeshSurface surface;
 	
 	private int _seed;
 	public Random rng {get; private set; }
@@ -287,11 +287,15 @@ public class GameMap : MonoBehaviour {
 		this.rootTile = null;
 		this.leaves = new Dictionary<Vector2,List<Doorway>>();
 		this.rng = new Random(Environment.TickCount);
-		this.links = new List<NavMeshLinkInstance>();
+		
+		this.surface = this.gameObject.AddComponent<NavMeshSurface>();
+		this.surface.collectObjects = CollectObjects.Children;
+		this.surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+		// ^PhysicsColliders cause scrap from previous days (parented to tiles) to block navigation
 	}
 	
 	protected virtual void OnDestroy() {
-		NavMesh.RemoveNavMeshData(navmesh);
+		this.surface.RemoveData();
 	}
 	
 	// Native Methods
@@ -378,30 +382,13 @@ public class GameMap : MonoBehaviour {
 		return newTile;
 	}
 	
+	// Possible optimization if necessary:
+	// Update navmesh instead of completely reconstructing it
 	public void GenerateNavMesh(int agentId) {
-		// Clear old data
-		NavMesh.RemoveNavMeshData(this.navmesh);
-		foreach (var link in this.links) {
-			NavMesh.RemoveLink(link);
-		}
-		links.Clear();
+		this.surface.RemoveData();
 		
-		List<NavMeshBuildSource> sources = new();
-		foreach (Tile t in this.GetComponentsInChildren<Tile>()) {
-			sources.AddRange(t.Navigables);
-			foreach (NavMeshLinkData link in t.Links) {
-				this.links.Add(NavMesh.AddLink(link));
-			}
-		}
-		
-		var navmeshdata = NavMeshBuilder.BuildNavMeshData(
-			NavMesh.GetSettingsByID(agentId),
-			sources,
-			new Bounds(Vector3.zero,Vector3.one * float.PositiveInfinity),
-			transform.position,
-			transform.rotation
-		);
-		this.navmesh = NavMesh.AddNavMeshData(navmeshdata);
-		this.navmesh.owner = this;
+		this.surface.agentTypeID = agentId;
+		this.surface.BuildNavMesh();
+		this.surface.AddData();
 	}
 }

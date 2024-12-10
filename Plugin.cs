@@ -30,7 +30,7 @@ public class Plugin : BaseUnityPlugin {
 	
 	private static bool initializedAssets = false;
 	
-	private const uint PROMOTE_LOG = 1;
+	private const uint PROMOTE_LOG = 0;
 	public static uint MIN_LOG = 0;
 	
 	// From and for UnityNetcodePatcher
@@ -225,12 +225,12 @@ public class MapHandler : NetworkBehaviour {
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveScrap() {
-		Plugin.LogFatal($"{this} Preserve");
 		this.activeMap.PreserveScrap();
 	}
 }
 
-
+// May be refactored as an extension of GrabbableObject, since we want to include equipment, too
+// (but not maneater :P)
 public class Scrap : MonoBehaviour {
 	
 	public GrabbableObject Grabbable {get {return this.GetComponent<GrabbableObject>();}}
@@ -247,7 +247,6 @@ public class Scrap : MonoBehaviour {
 		} if (noparentfound) {
 			this.transform.parent = MapHandler.Instance.ActiveMap.transform;
 		}
-		Plugin.LogFatal($"{this} Parent: {this.transform.parent}");
 		this.Grabbable.targetFloorPosition 
 			= this.Grabbable.startFallingPosition 
 			= this.transform.localPosition;
@@ -255,12 +254,10 @@ public class Scrap : MonoBehaviour {
 	
 	public void Preserve() {
 		this.FindParent();
-		Plugin.LogFatal($"{this}: Preserve");
 		this.gameObject.SetActive(false);
 	}
 	
 	public void Restore() {
-		Plugin.LogFatal($"{this}: Restore");
 		this.gameObject.SetActive(true);
 	}
 }
