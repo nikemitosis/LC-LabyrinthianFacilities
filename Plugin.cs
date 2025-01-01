@@ -1,4 +1,6 @@
-﻿namespace LabyrinthianFacilities;
+﻿// Fire exit doesn't spawn on offense mineshaft?
+
+namespace LabyrinthianFacilities;
 
 using DgConversion;
 
@@ -31,6 +33,8 @@ public class Plugin : BaseUnityPlugin {
 	private static bool initializedAssets = false;
 	
 	private const uint PROMOTE_LOG = 0;
+	// if other modders want to make this thing shut the fuck up, set this higher
+	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
 	public static uint MIN_LOG = 0;
 	
 	// From and for UnityNetcodePatcher
@@ -52,9 +56,15 @@ public class Plugin : BaseUnityPlugin {
 	
 	private void Awake() {
 		Logger = base.Logger;
+		try {
+			NetcodePatch();
+		} catch (Exception e) {
+			LogMessage($"NetcodePatch failed - {e.Message}");
+		}
+		
 		harmony.PatchAll();
 		
-		Logger.LogInfo($"Plugin {Plugin.GUID} is Awoken!");
+		LogInfo($"Plugin {Plugin.GUID} is Awoken!");
 	}
 	
 	public static void LogDebug(string message) {
@@ -104,9 +114,24 @@ public class Plugin : BaseUnityPlugin {
 	
 	public static void InitializeCustomGenerator() {
 		if (initializedAssets) return;
+		initializedAssets = true;
 		
 		Plugin.LogInfo($"Creating Tiles");
 		foreach (DunGen.Tile tile in Resources.FindObjectsOfTypeAll(typeof(DunGen.Tile))) {
+			// Surely there's a better way to fix +z being the vertical axis on these tiles...
+			switch (tile.gameObject.name) {
+				// manor 
+				case "CloverTile":
+				// mineshaft
+				case "CaveCrampedIntersectTile":
+				case "CaveSmallIntersectTile":
+				case "DeepShaftTile":
+				case "CaveWaterTile":
+				case "CaveLongRampTile":
+				case "CaveYTile":
+					tile.transform.rotation *= Quaternion.Euler(270,0,0);
+				break;
+			}
 			tile.gameObject.AddComponent<DTile>();
 		}
 		
@@ -152,9 +177,11 @@ public class MapHandler : NetworkBehaviour {
 			this.GetComponent<NetworkObject>().Despawn(true);
 			return;
 		}
+		Plugin.InitializeCustomGenerator();
 		Instance = this;
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
 		maps = new Dictionary<SelectableLevel,DGameMap>();
+		
 	}
 	public override void OnNetworkDespawn() {
 		MapHandler.Instance = null;
@@ -163,6 +190,7 @@ public class MapHandler : NetworkBehaviour {
 	
 	public static void OnDisconnect(bool isHost) {
 		Plugin.LogInfo($"Disconnecting: Destroying local instance of MapHandler");
+		Instance.NetworkManager.OnClientStopped -= MapHandler.OnDisconnect;
 		Instance.OnNetworkDespawn();
 	}
 	

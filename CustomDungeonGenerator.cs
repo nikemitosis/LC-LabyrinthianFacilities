@@ -15,8 +15,13 @@ using Unity.Netcode;
 using Random = System.Random;
 
 public class Doorway : MonoBehaviour {
+	// Events
+	public event Action<Doorway> OnDisconnect;
+	
 	// Properties
-	public Tile Tile {get {return this.tile;}}
+	public Tile Tile {get {
+		return this.tile ??= this.GetComponentInParent<Tile>(includeInactive: true);
+	}}
 	public Vector2 Size {get {return this.size;} protected set {this.size = value;}}
 	public bool IsVacant {get {return this.connection == null;}}
 	public bool Initialized {
@@ -30,6 +35,11 @@ public class Doorway : MonoBehaviour {
 	protected Vector2 size;
 	protected Doorway connection;
 	
+	// Monobehaviour Stuff
+	protected virtual void OnDestroy() {
+		if (connection == null) this.Tile?.Map?.RemoveLeaf(this);
+		else this.Disconnect();
+	}
 	
 	// Native Stuff
 	public virtual void Initialize() {
@@ -37,10 +47,6 @@ public class Doorway : MonoBehaviour {
 		this.Initialized = true;
 		
 		this.connection = null;
-		this.tile = this.GetComponentInParent<Tile>(includeInactive: true);
-		if (this.tile == null) {
-			throw new NullReferenceException("Doorway cannot find its parent tile");
-		}
 	}
 	
 	public virtual bool Fits(Doorway other) {
@@ -57,7 +63,13 @@ public class Doorway : MonoBehaviour {
 		other.connection = this;
 	}
 	
-	
+	public virtual void Disconnect() {
+		if (this.connection == null) return;
+		var con = this.connection;
+		this.connection = null;
+		con.Disconnect();
+		this.OnDisconnect?.Invoke(this);
+	}
 }
 
 public class Tile : MonoBehaviour {
@@ -91,16 +103,16 @@ public class Tile : MonoBehaviour {
 	public Bounds BoundingBox {get {return this.bounding_box;}}
 	public GameMap Map {get {return this.GetComponentInParent<GameMap>();}}
 	
-	public NavMeshBuildSource[] Navigables {get {return this.navigables;}}
-	public NavMeshLinkData[] Links {get {return this.links;}}
+	// public NavMeshBuildSource[] Navigables {get {return this.navigables;}}
+	// public NavMeshLinkData[] Links {get {return this.links;}}
 	
 	// Protected/Private
 	protected Doorway[] doorways = null;
 	protected Bounds bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 	protected bool initialized = false;
 	
-	protected NavMeshBuildSource[] navigables = new NavMeshBuildSource[0];
-	protected NavMeshLinkData[] links = new NavMeshLinkData[0];
+	// protected NavMeshBuildSource[] navigables = new NavMeshBuildSource[0];
+	// protected NavMeshLinkData[] links = new NavMeshLinkData[0];
 	
 	
 	// Native Methods
@@ -109,11 +121,8 @@ public class Tile : MonoBehaviour {
 		newtile.bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 		
 		// rotation & position handled internally, do not inherit from parent
-		Vector3 diff = this.bounding_box.center - this.transform.position;
-		newtile.gameObject.transform.SetParent(parent,worldPositionStays: true);
-		newtile.bounding_box.center = newtile.transform.position + diff;
-		
-		newtile.gameObject.transform.rotation = Quaternion.LookRotation(Vector3.forward);
+		newtile.transform.SetParent(parent,worldPositionStays: true);
+		// newtile.RotateBy(this.transform.localRotation);
 		
 		newtile.Initialize();
 		TileInstantiatedEvent?.Invoke(newtile);
@@ -129,18 +138,29 @@ public class Tile : MonoBehaviour {
 		return;
 	}
 	
+	public static float intersection_tolerance = 1f/8;
 	public bool Intersects(Tile other) {
+		var tbb = this.bounding_box;
+		var obb = other.bounding_box;
+		
 		// we dont want to include borders, and are ok with a little wiggle-room
 		// hence the random offset of extents
-		this.bounding_box.extents -= Vector3.one*1/2; 
-		other.bounding_box.extents -= Vector3.one*1/2;
-		bool rt = this.bounding_box.Intersects(other.bounding_box);
+		tbb.extents -= Vector3.one*intersection_tolerance;
+		obb.extents -= Vector3.one*intersection_tolerance;
 		
-		//restore bounding boxes
-		this.bounding_box.extents += Vector3.one*1/2;
-		other.bounding_box.extents += Vector3.one*1/2;
+		tbb.size = new Vector3(
+			tbb.size.x < 0 ? 0 : tbb.size.x,
+			tbb.size.y < 0 ? 0 : tbb.size.y,
+			tbb.size.z < 0 ? 0 : tbb.size.z
+		);
 		
-		return rt;
+		obb.size = new Vector3(
+			obb.size.x < 0 ? 0 : obb.size.x,
+			obb.size.y < 0 ? 0 : obb.size.y,
+			obb.size.z < 0 ? 0 : obb.size.z
+		);
+		
+		return tbb.Intersects(obb) && obb.size != Vector3.zero && tbb.size != Vector3.zero;
 	}
 	
 	// WARNING: Bounding box increases *permanantly* with most calls. This should only be called once
@@ -152,7 +172,7 @@ public class Tile : MonoBehaviour {
 		this.bounding_box.center = this.transform.position + quat * diff;
 		this.bounding_box.extents = quat * this.bounding_box.extents;
 		this.bounding_box.FixExtents();
-		this.transform.rotation *= quat;
+		this.transform.Rotate(quat.eulerAngles,Space.World);
 	}
 	
 	public void MoveTo(Vector3 pos) {
@@ -178,19 +198,20 @@ public class Tile : MonoBehaviour {
 			);
 		}
 		
-		var tile = this.Instantiate(parent: other.gameObject.transform);
+		var tile = this.Instantiate(parent: other.transform);
 		var thisDoorway = tile.Doorways[thisDoorwayIdx];
 		
 		// Undo this rotation, do other rotation, do 180 about vertical axis
 		Quaternion rotation = (
-			Quaternion.Inverse(thisDoorway.gameObject.transform.rotation) 
-			* other.gameObject.transform.rotation
+			Quaternion.Inverse(thisDoorway.transform.rotation) 
+			* other.transform.rotation
 			* new Quaternion(0,1,0,0)
 		);
 		
+		
 		tile.RotateBy(rotation);
 		
-		//local position accounts for parent rotation, which makes sense, 
+		// local position accounts for parent rotation, which makes sense, 
 		// but fucking confused me for so long
 		Vector3 doorLocalPos = thisDoorway.transform.position - tile.bounding_box.center;
 		tile.MoveTo(
@@ -198,7 +219,7 @@ public class Tile : MonoBehaviour {
 		);
 		foreach (Tile t in tile.GetComponentInParent<GameMap>().GetComponentsInChildren<Tile>()) {
 			if (tile.Intersects(t) && !object.ReferenceEquals(t,tile)) {
-				tile.transform.SetParent(null);
+				// tile.transform.SetParent(null);
 				GameObject.Destroy(tile.gameObject);
 				return null;
 			}
@@ -209,7 +230,9 @@ public class Tile : MonoBehaviour {
 	}
 }
 
-public struct PlacementInfo {
+public abstract class GenerationAction {}
+
+public class PlacementInfo : GenerationAction {
 	private Tile newtile;
 	private int newDoorwayIdx;
 	private Doorway attachmentPoint;
@@ -231,15 +254,24 @@ public struct PlacementInfo {
 		}
 	}
 	
-	public PlacementInfo(Tile nt, int ndi=0, Doorway ap=null) {
+	public PlacementInfo(Tile nt=null, int ndi=0, Doorway ap=null) {
 		newtile = nt;
 		newDoorwayIdx = ndi;
 		attachmentPoint = ap;
 	}
 }
 
+public class RemovalInfo : GenerationAction {
+	private Tile target;
+	public Tile Target {get {return target;}}
+	
+	public RemovalInfo(Tile target) {
+		this.target = target;
+	}
+}
+
 public interface ITileGenerator {
-	public IEnumerable<PlacementInfo> Generator(GameMap map);
+	public IEnumerable<GenerationAction> Generator(GameMap map);
 	
 	public void FailedPlacementHandler(Tile tile) {
 		return;
@@ -251,8 +283,9 @@ public class GameMap : MonoBehaviour {
 	// Delegates & Events
 	
 	// In the event of a failed insertion, tile is null 
-	public delegate void TileInsertionDelegate(Tile tile);
-	public event TileInsertionDelegate TileInsertionEvent;
+	public event Action<Tile> TileInsertionEvent;
+	// TileRemovalEvent Invoked before removal actually occurs
+	public event Action<Tile> TileRemovalEvent;
 	
 	public delegate void GenerationCompleteDelegate(GameMap map);
 	public event GenerationCompleteDelegate GenerationCompleteEvent;
@@ -277,7 +310,8 @@ public class GameMap : MonoBehaviour {
 	
 	private Dictionary<Vector2,List<Doorway>> leaves;
 	private int numLeaves = 0;
-	protected NavMeshSurface surface;
+	protected NavMeshSurface navSurface;
+	protected NavMeshDataInstance navInstance;
 	
 	private int _seed;
 	public Random rng {get; private set; }
@@ -288,14 +322,14 @@ public class GameMap : MonoBehaviour {
 		this.leaves = new Dictionary<Vector2,List<Doorway>>();
 		this.rng = new Random(Environment.TickCount);
 		
-		this.surface = this.gameObject.AddComponent<NavMeshSurface>();
-		this.surface.collectObjects = CollectObjects.Children;
-		this.surface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
-		// ^PhysicsColliders cause scrap from previous days (parented to tiles) to block navigation
+		this.navSurface = this.gameObject.AddComponent<NavMeshSurface>();
+		this.navSurface.collectObjects = CollectObjects.Children;
+		this.navSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+		// ^NavMeshCollectGeometry.PhysicsColliders cause scrap from previous days to block navigation
 	}
 	
 	protected virtual void OnDestroy() {
-		this.surface.RemoveData();
+		this.navSurface.RemoveData();
 	}
 	
 	// Native Methods
@@ -303,8 +337,16 @@ public class GameMap : MonoBehaviour {
 		
 		if (seed != null) this.Seed = (int)seed;
 		
-		foreach (PlacementInfo placement in tileGen.Generator(this)) {
-			this.TileInsertionEvent?.Invoke(this.AddTile(placement));
+		foreach (GenerationAction action in tileGen.Generator(this)) {
+			if (action is PlacementInfo) {
+				this.TileInsertionEvent?.Invoke(this.AddTile((PlacementInfo)action));
+			} else if (action is RemovalInfo) {
+				var removal = (RemovalInfo)action;
+				this.TileRemovalEvent?.Invoke(removal.Target);
+				this.RemoveTile(removal);
+			} else {
+				throw new InvalidCastException($"Unknown GenerationAction: {action}");
+			}
 			yield return null;
 			// yield return Plugin.DebugWait();
 		}
@@ -331,11 +373,13 @@ public class GameMap : MonoBehaviour {
 			if (!this.leaves.TryGetValue((Vector2)size,out ds)) return null;
 			
 			int idx = idxn ?? this.rng.Next(ds.Count);
-			return ds[idx];
+			return idx < ds.Count ? ds[idx] : null;
 		}
 	}
 	
 	public void AddLeaf(Doorway d) {
+		if (d == null) return;
+		
 		List<Doorway> leaf;
 		if (this.leaves.TryGetValue(d.Size, out leaf)) {
 			leaf.Add(d);
@@ -345,6 +389,12 @@ public class GameMap : MonoBehaviour {
 			this.leaves.Add(d.Size,leaf);
 		}
 		numLeaves++;
+	}
+	
+	public void RemoveLeaf(Doorway d) {
+		try {
+			this.leaves[d.Size].Remove(d);
+		} catch (KeyNotFoundException _) {}
 	}
 	
 	public virtual Tile AddTile(PlacementInfo placement) {
@@ -367,7 +417,7 @@ public class GameMap : MonoBehaviour {
 		if (!this.leaves.TryGetValue(newTileTargetDoorwaySize,out leafset)) {
 			return null;
 		}
-			
+		
 		newTile = tile.Place(newTileTargetDoorwayIdx,leaf);
 		if (newTile == null) return null;
 		
@@ -376,19 +426,28 @@ public class GameMap : MonoBehaviour {
 		for (int i=0; i<newTile.Doorways.Length; i++) {
 			if (i != newTileTargetDoorwayIdx) {
 				this.AddLeaf(newTile.Doorways[i]);
+				newTile.Doorways[i].OnDisconnect += (Doorway d) => {
+					if (d.Tile.gameObject.activeInHierarchy) d.Tile.Map.AddLeaf(d);
+				};
 			}
 		}
 		
 		return newTile;
 	}
 	
+	public virtual void RemoveTile(RemovalInfo removal) {
+		foreach (Tile t in removal.Target.gameObject.GetComponentsInChildren<Tile>()) {
+			this.TileRemovalEvent?.Invoke(t);
+		}
+		GameObject.Destroy(removal.Target.gameObject);
+	}
+	
 	// Possible optimization if necessary:
 	// Update navmesh instead of completely reconstructing it
 	public void GenerateNavMesh(int agentId) {
-		this.surface.RemoveData();
-		
-		this.surface.agentTypeID = agentId;
-		this.surface.BuildNavMesh();
-		this.surface.AddData();
+		this.navSurface.RemoveData();
+		this.navSurface.agentTypeID = agentId;
+		this.navSurface.BuildNavMesh();
+		this.navSurface.AddData();
 	}
 }

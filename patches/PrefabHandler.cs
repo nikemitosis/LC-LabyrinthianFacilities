@@ -36,7 +36,6 @@ public class PrefabInitializer {
 	}
 }
 
-// Probably need to despawn this
 [HarmonyPatch(typeof(StartOfRound))]
 public class PrefabSpawner {
 	[HarmonyPostfix]
@@ -44,7 +43,5 @@ public class PrefabSpawner {
 	public static void SpawnMapHandler() {
 		if (MapHandler.Instance != null) return;
 		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
-		
-		Plugin.InitializeCustomGenerator();
 	}
 }

@@ -16,13 +16,16 @@ class GenerateLevel {
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		
-		Plugin.LogInfo("Custom Generate!");
+		Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
 		var flow = new DungeonFlowConverter(__instance.DungeonFlow);
 		
+		// int[] seed={369750209,1881379015};
+		// int i=0;
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			0,// __instance.Seed,
+			// seed[(i++)%2],
+			__instance.Seed,
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
 		
@@ -36,17 +39,13 @@ class GenerateLevel {
 	}
 }
 
-/*
-[HarmonyPatch(typeof(StartOfRound))]
-class StartOfRoundPatch {
+[HarmonyPatch(typeof(RoundManager))]
+class PreserveScrapPatch {
 	
-	[HarmonyPatch("ShipLeave")]
+	[HarmonyPatch("DespawnPropsAtEndOfRound")]
 	[HarmonyPrefix]
-	public static void SaveMatchUponLeaving() {
-		if (Plugin.local_fatal_error) return;
-		
-		Plugin.LogInfo("Saving map!");
-		MapHandler.Save();
+	public static void PreserveScrap() {
+		Plugin.LogInfo("Hiding scrap!");
+		MapHandler.Instance.PreserveScrap();
 	}
 }
-*/

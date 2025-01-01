@@ -1,10 +1,12 @@
 namespace LabyrinthianFacilities.DgConversion;
 
 using BoundsExtensions;
+using Util;
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 
 using UnityEngine;
 using UnityEngine.AI;
@@ -30,16 +32,25 @@ public class DDoorway : Doorway {
 		Bounds bounds = Tile.BoundingBox;
 		RectFace[] faces = bounds.GetFaces();
 		
-		float lowest_dist = faces[0].bounds.SqrDistance(this.transform.position);
+		// float lowest_dist = faces[0].bounds.SqrDistance(this.transform.position);
+		// highest w component is highest cosine of 1/2*angle, which means lowest angle
+		// (the angle is how much the door has to rotate to face whatever face)
+		
+		float lowest_dist = Vector3.Angle(
+			faces[0].perpindicular, this.transform.rotation * Vector3.forward
+		);
 		RectFace closest_face = faces[0];
-		for (uint i=2; i<6; i++) {
-			if (/* i == 1 || */ i == 4) continue;
-			float dist = faces[i].bounds.SqrDistance(this.transform.position);
+		
+		for (uint i=1; i<6; i++) {
+			float dist = (
+				faces[i].perpindicular - this.transform.rotation * Vector3.forward
+			).magnitude;
 			if (dist < lowest_dist) {
 				lowest_dist = dist;
 				closest_face = faces[i];
 			}
 		}
+		
 		this.transform.rotation = Quaternion.LookRotation(closest_face.perpindicular);
 	}
 	
@@ -51,14 +62,9 @@ public class DDoorway : Doorway {
 			return o;
 		}
 		
-		// Vector3 relpos = o.transform.localPosition;
-		// Quaternion relrot = o.transform.localRotation;
-		
 		var newobj = GameObject.Instantiate(o);
 		newobj.transform.SetParent(this.transform);
-		// newobj.transform.localPosition = relpos;
 		newobj.transform.localPosition = Vector3.zero;
-		// newobj.transform.localRotation = relrot;
 		newobj.transform.localRotation = Quaternion.identity;
 		return newobj;
 	}
@@ -67,6 +73,10 @@ public class DDoorway : Doorway {
 	public DDoorway() {
 		if (this.gameObject == null) return;
 		InitSize();
+	}
+	
+	private void Awake() {
+		base.OnDisconnect += DDoorway.DisconnectAction;
 	}
 	
 	public void InitSize() {
@@ -85,7 +95,11 @@ public class DDoorway : Doorway {
 		
 		for (int i=0; i<dg.BlockerSceneObjects.Count; i++) {
 			var blocker = dg.BlockerSceneObjects[i];
+			if (blocker == null) continue;
 			var b = instantiateSubPart(blocker);
+			var prop = b.AddComponent<TileProp>();
+			prop.IsBlocker = true;
+			prop.DoorwayReference = this;
 			objs.Add(b);
 			// b.SetActive(true); // (already active)
 		}
@@ -96,24 +110,37 @@ public class DDoorway : Doorway {
 			var door = dg.ConnectorSceneObjects[i];
 			if (door == null) continue;
 			var d = instantiateSubPart(door);
+			var prop = d.AddComponent<TileProp>();
+			prop.IsConnector = true;
+			prop.DoorwayReference = this;
 			objs.Add(d);
 			d.SetActive(false);
 		}
 		this.alwaysDoors = objs.ToArray();
 		
-		this.randomBlockerSet = new GameObject[dg.BlockerPrefabWeights.Count];
+		this.randomBlockerSet = new GameObject[dg.BlockerPrefabWeights?.Count ?? 0];
 		for (int i=0; i<randomBlockerSet.Length; i++) {
 			var blocker = dg.BlockerPrefabWeights[i].GameObject;
 			var b = instantiateSubPart(blocker);
+			var prop = b?.AddComponent<TileProp>();
+			if (prop != null) {
+				prop.IsConnector = true;
+				prop.DoorwayReference = this;
+			}
 			this.randomBlockerSet[i] = b;
 			b?.SetActive(false);
 		}
 		
-		this.randomDoorSet = new GameObject[dg.ConnectorPrefabWeights.Count];
+		this.randomDoorSet = new GameObject[dg.ConnectorPrefabWeights?.Count ?? 0];
 		for (int i=0; i<randomDoorSet.Length; i++) {
 			var door = dg.ConnectorPrefabWeights[i].GameObject;
 			var d = instantiateSubPart(door);
 			this.randomDoorSet[i] = d;
+			var prop = d?.AddComponent<TileProp>();
+			if (prop != null) {
+				prop.IsConnector = true;
+				prop.DoorwayReference = this;
+			}
 			d?.SetActive(false);
 		}
 		
@@ -141,7 +168,7 @@ public class DDoorway : Doorway {
 	}
 	
 	// Native Methods
-	// Boss Doorway in charge of door
+	// Boss Doorway in charge of random door object
 	private void OnConnect(bool isBossDoor) {
 		foreach (GameObject o in this.alwaysBlockers) {
 			o.SetActive(false);
@@ -160,16 +187,287 @@ public class DDoorway : Doorway {
 			this.currentlyActiveRandomObject = null;
 		}
 	}
+	private static void DisconnectAction(Doorway door) {
+		var d = (DDoorway)door;
+		foreach (GameObject o in d.alwaysBlockers) {
+			o.SetActive(true);
+		}
+		foreach (GameObject o in d.alwaysDoors) {
+			o.SetActive(false);
+		}
+		
+		d.currentlyActiveRandomObject?.SetActive(false);
+		d.currentlyActiveRandomObject = (
+			d.randomBlockerSet.Length != 0
+		) ? (
+			d.randomBlockerSet[
+				d.Tile.Map.rng.Next(d.randomBlockerSet.Length)
+			]
+		) : null;
+		d.currentlyActiveRandomObject?.SetActive(true);
+	}
+}
+
+public class TileProp : MonoBehaviour {
+	public bool IsBlocker {get; internal set;} = false;
+	public bool IsConnector {get; internal set;} = false;
+	public DDoorway DoorwayReference {get; internal set;} = null;
+	
+	public event Action<TileProp> OnEnableEvent;
+	public event Action<TileProp> OnDisableEvent;
+	public event Action<TileProp> OnDestroyEvent;
+	
+	protected List<PropSet> propSets = new();
+	
+	public bool IsForcedOff {get {
+		return IsBlocker && !DoorwayReference.IsVacant || IsConnector && DoorwayReference.IsVacant;
+	}}
+	public bool Ok {get {
+		if (this.gameObject.activeSelf && IsForcedOff) return false;
+		foreach (var pset in propSets) {
+			if (!pset.Ok) return false;
+		}
+		return true;
+	}}
+	public bool CanToggle {get {
+		if (this.gameObject.activeSelf) return CanDisable;
+		else return CanEnable;
+	}}
+	public bool CanEnable {get {
+		if (this.gameObject.activeSelf || IsForcedOff) return false;
+		foreach (var pset in propSets) {
+			if (pset.NumActive + 1 > pset.Range.max) return false;
+		}
+		return true;
+	}}
+	public bool CanDisable {get {
+		if (!this.gameObject.activeSelf) return false;
+		foreach (var pset in propSets) {
+			if (pset.NumActive - 1 < pset.Range.min) return false;
+		}
+		return true;
+	}}
+	
+	private void OnEnable()  {this.OnEnableEvent ?.Invoke(this);}
+	private void OnDisable() {this.OnDisableEvent?.Invoke(this);}
+	private void OnDestroy() {this.OnDestroyEvent?.Invoke(this);}
+}
+
+public class PropSet {
+	// Protected/Private
+	private (int min, int max) range;
+	private DGameMap map;
+	
+	private WeightedList<TileProp> props;
+	private WeightedList<TileProp> activeProps;
+	private WeightedList<TileProp> inactiveProps;
+	
+	private void PropEnabled(TileProp p) {
+		if (inactiveProps != null && activeProps != null) {
+			float weight;
+			inactiveProps.Remove(p,out weight);
+			activeProps.Add(p,weight);
+		}
+	}
+	private void PropDisabled(TileProp p) {
+		if (inactiveProps != null && activeProps != null) {
+			float weight;
+			activeProps.Remove(p,out weight);
+			inactiveProps.Add(p,weight);
+		}
+	}
+	
+	// Properties
+	public bool High {get {return NumActive > Range.max;}}
+	public bool Low {get {return NumActive < Range.min;}}
+	public bool Ok {get {return !(High || Low);}} // neither high nor low
+	public int NumActive {get {return activeProps.Count;}}
+	public (int min,int max) Range {get {return range;}}
+	
+	public PropSet(DGameMap map, (int min, int max) range) {
+		this.map = map;
+		this.range = range;
+		
+		this.props = new();
+		this.activeProps = null;
+		this.inactiveProps = null;
+		
+	}
+	
+	public void InitActivityLists() {
+		this.activeProps = new();
+		this.inactiveProps = new();
+		foreach (TileProp prop in this.props) {
+			if (prop == null) {
+				this.props.Remove(prop);
+				continue;
+			}
+			if (prop.isActiveAndEnabled) {
+				this.activeProps.Add(prop, this.props[prop]);
+			} else {
+				this.inactiveProps.Add(prop, this.props[prop]);
+			}
+		}
+	}
+	
+	public void Display() {
+		Plugin.LogDebug($"Active props: ");
+		foreach (var prop in this.activeProps) {
+			Plugin.LogDebug(
+				$"{prop} ({prop.gameObject.activeSelf}, {prop.gameObject.activeInHierarchy})"
+			);
+		}
+		Plugin.LogDebug($"Inactive props: ");
+		foreach (var prop in this.inactiveProps) {
+			Plugin.LogDebug(
+				$"{prop} ({prop.gameObject.activeSelf}, {prop.gameObject.activeInHierarchy})"
+			);
+		}
+		Plugin.LogDebug("");
+	}
+	
+	public void AddProp(TileProp p, float weight) {
+		this.props.Add(p,weight);
+		p.OnDisableEvent += this.PropDisabled;
+		p.OnEnableEvent += this.PropEnabled; 
+		p.OnDestroyEvent += this.RemoveProp;
+	}
+	public void RemoveProp(TileProp p) {
+		this.props.Remove(p);
+		p.OnDisableEvent -= this.PropDisabled;
+		p.OnEnableEvent -= this.PropEnabled;
+		p.OnDestroyEvent -= this.RemoveProp;
+		if (this.activeProps   != null) this.activeProps.Remove(p);
+		if (this.inactiveProps != null) this.inactiveProps.Remove(p);
+	}
+	
+	// returns false when randomly chosen prop cannot be enabled or no prop is found
+	// does *not* necessarily mean there are no props available to be enabled!
+	public bool EnableRandomProp() {
+		if (this.inactiveProps.Count == 0) return false;
+		
+		Random rng = this.map.rng;
+		float index = this.inactiveProps.SummedWeight * (float)rng.NextDouble();
+		
+		TileProp prop = this.inactiveProps[index];
+		if (!prop.CanEnable) return false;
+		
+		prop.gameObject.SetActive(true);
+		
+		return prop.isActiveAndEnabled;
+	}
+	public bool DisableRandomProp() {
+		if (this.activeProps.Count == 0) return false;
+		
+		Random rng = this.map.rng;
+		float index = this.activeProps.SummedWeight * (float)rng.NextDouble();
+		
+		TileProp prop = this.activeProps[index];
+		if (!prop.CanDisable) return false;
+		
+		prop.gameObject.SetActive(false);
+		
+		return !prop.isActiveAndEnabled;
+	}
+	
+	// Most common reason that lower bounds are violated: parent not enabled, so propset cannot 
+	// use SetActive to enable the prop
+	public static void Resolve(DGameMap map, IEnumerable<PropSet> psets) {
+		List<PropSet> ok = new();
+		List<PropSet> low = new();
+		List<PropSet> high = new();
+		foreach (PropSet pset in psets) {
+			pset.InitActivityLists();
+			if (pset.Low) {
+				low.Add(pset);
+			} else if (pset.High) {
+				high.Add(pset);
+			} else {
+				ok.Add(pset);
+			}
+		}
+		
+		uint iterationCount = 0;
+		Random rng = map.rng;
+		
+		while (low.Count != 0 || high.Count != 0) {
+			// Resolve current issues
+			do {
+				bool chooseHigh;
+				if (low.Count == 0) {
+					chooseHigh = true;
+				} else if (high.Count == 0) {
+					chooseHigh = false;
+				} else {
+					chooseHigh = rng.Next(2) == 0;
+				}
+				
+				PropSet target;
+				if (chooseHigh) {
+					target = high[rng.Next(high.Count)];
+					while (target.DisableRandomProp() && target.High);
+					if (target.Ok) {
+						high.Remove(target);
+						ok.Add(target);
+					}
+				} else {
+					target = low[rng.Next(low.Count)];
+					while (target.EnableRandomProp() && target.Low);
+					if (target.Ok) {
+						low.Remove(target);
+						ok.Add(target);
+					}
+				}
+				iterationCount++;
+				if (iterationCount % 1000 == 0) {
+					Plugin.LogDebug(
+						$"{iterationCount} iterations: \n"
+						+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
+					);
+				}
+				if (iterationCount == 10000) {
+					Plugin.LogWarning("Aborted prop spawning after 10,000 iterations");
+					// Plugin.LogDebug($"low:");
+					// foreach (PropSet p in low) {
+						// p.Display();
+					// }
+					// Plugin.LogDebug("");
+					// Plugin.LogDebug($"high:");
+					// foreach (PropSet p in high) {
+						// p.Display();
+					// }
+					return;
+				}
+			} while (low.Count != 0 || high.Count != 0);
+			
+			// Check if any other sets have gone out of range
+			List<(PropSet pset, List<PropSet> dst)> moves = new();
+			foreach (PropSet pset in ok) {
+				if (pset.Low) {
+					moves.Add((pset,low));
+				} else if (pset.High) {
+					moves.Add((pset,high));
+				}
+			}
+			foreach (var move in moves) {
+				move.dst.Add(move.pset);
+				ok.Remove(move.pset);
+			}
+			Plugin.LogDebug(
+				$"{iterationCount} iterations: \n"
+				+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
+			);
+		}
+	}
 }
 
 public class DTile : Tile {
 	// Properties
-	internal DunGen.GlobalProp[] GlobalProps {get {return globalProps;}}
+	internal PropSet[] LocalPropSets {get {return localPropSets;}}
 	
 	// Protected/Private
-	protected DunGen.LocalPropSet[] localProps;
-	protected DunGen.GlobalProp[] globalProps;
 	protected List<GrabbableObject> ownedObjects;
+	protected PropSet[] localPropSets;
 	
 	// Private Helper Methods
 	private Bounds DeriveBounds() {
@@ -207,49 +505,23 @@ public class DTile : Tile {
 		if (bounds.extents == Vector3.zero && collider != null) bounds = collider.bounds;
 		Plugin.LogDebug($"{this.gameObject.name} extents: {bounds.extents}");
 		
+		// Special rules
+		switch (this.gameObject.name) {
+			case "ElevatorConnector(Clone)":
+				bounds = new Bounds(Vector3.zero,Vector3.zero);
+			break; case "StartRoom(Clone)":
+				bounds.Encapsulate(
+					this.transform.Find("VisualMesh").Find("StartRoomElevator")
+						.GetComponent<MeshFilter>().sharedMesh.bounds
+				);
+			break; case "MineshaftStartTile(Clone)":
+				// Do not include the entire start room
+				// (makes bounds at bottom of elevator stick out way too far)
+				bounds = new Bounds(new Vector3(3.4f,20f,3.4f), new Vector3(6.8f,60f,6.8f));
+			break;
+		}
+		
 		return bounds;
-	}
-	
-	private void InitNavStuff(GameMap map) {
-		if (this == null) {
-			map.GenerationCompleteEvent -= InitNavStuff;
-			return;
-		}
-		
-		List<NavMeshBuildSource> navigables = new();
-		List<NavMeshLinkData> links = new();
-		
-		// navmesh sources
-		
-		foreach (MeshFilter c in this.GetComponentsInChildren<MeshFilter>(includeInactive: false)) {
-			NavMeshBuildSource src = new(); {
-				src.area = 0;
-				src.component = c;
-				src.generateLinks = true;
-				src.shape = NavMeshBuildSourceShape.Mesh; 
-				src.size = c.sharedMesh.bounds.size;
-				src.sourceObject = c.sharedMesh;
-				src.transform = c.transform.localToWorldMatrix;
-			}
-			navigables.Add(src);
-		}
-		
-		// links
-		foreach (OffMeshLink link in this.GetComponentsInChildren<OffMeshLink>()) {
-			var newlink = new NavMeshLinkData(); {
-				newlink.agentTypeID = 0;
-				newlink.area = 0;
-				newlink.bidirectional = link.biDirectional;
-				newlink.costModifier = link.costOverride; // assuming this is correct
-				newlink.endPosition = link.endTransform.position;
-				newlink.startPosition = link.startTransform.position;
-				newlink.width = 1;
-			}
-			links.Add(newlink);
-		}
-		
-		this.navigables = navigables.ToArray();
-		this.links = links.ToArray();
 	}
 	
 	protected override void Initialize() {
@@ -257,7 +529,7 @@ public class DTile : Tile {
 		base.Initialize();
 		this.Initialized = true;
 		
-		//Bounds
+		// Bounds
 		Plugin.LogDebug("Getting bounds...");
 		Bounds bounds = this.DeriveBounds();
 		if (bounds.size == Vector3.zero) {
@@ -274,136 +546,85 @@ public class DTile : Tile {
 			d.Initialize();
 		}
 		
+		// Props
+		Plugin.LogDebug("Retrieving Props...");
 		// Local Props
-		Plugin.LogDebug("Spawning LocalProps...");
-		this.localProps = this.GetComponentsInChildren<DunGen.LocalPropSet>(includeInactive: true);
-		this.DecideLocalProps();
+		var localPropSets = this.GetComponentsInChildren<DunGen.LocalPropSet>(includeInactive:true);
+		List<PropSet> psets = new();
+		foreach (var localPropSet in localPropSets) {
+			PropSet propset = new PropSet(
+				(DGameMap)this.Map, 
+				(localPropSet.PropCount.Min, localPropSet.PropCount.Max)
+			);
+			psets.Add(propset);
+			foreach (var entry in localPropSet.Props.Weights) {
+				GameObject propObject = entry.Value;
+				if (propObject == null) continue;
+				var prop = propObject.GetComponent<TileProp>() ?? propObject.AddComponent<TileProp>();
+				propset.AddProp(prop, (entry.MainPathWeight + entry.BranchPathWeight)/2.0f);
+			}
+		}
+		this.localPropSets = psets.ToArray();
 		
-		// Global Props (Not initialized here, just fetched for later initialization)
-		Plugin.LogDebug("Fetching GlobalProps...");
-		this.globalProps = this.GetComponentsInChildren<DunGen.GlobalProp>(includeInactive: true);
-		
-		// Plugin.LogDebug("Initializing Navigation");
-		this.Map.GenerationCompleteEvent += this.InitNavStuff;
-	}
-	
-	// Native Methods
-	public void DecideLocalProps() {
-		foreach (var propset in this.localProps) {
-			Plugin.LogDebug($"Handling propset {propset}");
-			
-			// Disable by default
-			foreach (DunGen.GameObjectChance propAndChance in propset.Props.Weights) {
-				propAndChance.Value?.SetActive(false);
-			}
-			
-			// Choose & Enable props
-			int spawnCount = this.Map.rng.Next(propset.PropCount.Min,propset.PropCount.Max+1);
-			DunGen.GameObjectChanceTable proptable = propset.Props;
-			
-			// List of props to choose from
-			List<(GameObject prop, float chance)> props = new();
-			foreach (var item in proptable.Weights) {
-				float chance = (item.MainPathWeight + item.BranchPathWeight) / 2.0f;
-				if (chance > 0 && item.Value != null) {
-					props.Add((item.Value,chance));
-				}
-			}
-			
-			// Infinite-loop prevention
-			if (spawnCount > props.Count) {
-				Plugin.LogDebug(
-					$"Not enough props. Max of {propset.PropCount.Max+1}, only had {spawnCount}"
-				);
-				spawnCount = props.Count;
-			}
-			
-			for (int i=0; i<spawnCount; i++) {
-				while (true) {
-					int idx = this.Map.rng.Next(props.Count);
-					(GameObject prop, float chance) = props[idx];
-					
-					// System.Random.NextSingle isn't defined????
-					if (chance > (float)this.Map.rng.NextDouble()) { 
-						prop.SetActive(true);
-						props.RemoveAt(idx);
-						break;
-					}
-				}
-			}
+		// Global Props
+		foreach (
+			var globalProp in this.GetComponentsInChildren<DunGen.GlobalProp>(includeInactive:true)
+		) {
+			PropSet pset = ((DGameMap)this.Map).GetGlobalPropSet(globalProp.PropGroupID);
+			GameObject propObject = globalProp.gameObject;
+			var prop = propObject.GetComponent<TileProp>() ?? propObject.AddComponent<TileProp>();
+			pset.AddProp(prop, (globalProp.MainPathWeight + globalProp.BranchPathWeight)/2.0f);
 		}
 	}
 }
 
 public class DGameMap : GameMap {
-	protected Dictionary<int, List<DunGen.GlobalProp>> globalPropSpawns;
-	protected Dictionary<int, List<DunGen.GlobalProp>> activeGlobalProps;
+	protected DungeonFlow flow;
+	protected Dictionary<int, PropSet> globalPropSets;
 	
 	// Constructors/Initialization
-	public DGameMap() {
-		this.globalPropSpawns = new();
-		this.activeGlobalProps = new();
+	protected override void Awake() {
+		base.Awake();
 		
-		this.TileInsertionEvent += RegisterTileProps;
 		this.GenerationCompleteEvent += this.RestoreScrap;
+		globalPropSets = new();
 	}
 	
 	// Native Methods
-	private void AddProp(DunGen.GlobalProp p) {
-		List<DunGen.GlobalProp> propList = null;
-		if (!globalPropSpawns.TryGetValue(p.PropGroupID,out propList)) {
-			propList = new();
-			globalPropSpawns.Add(p.PropGroupID,propList);
-		}
-		propList.Add(p);
-	}
-	
-	private (int min,int max) GetPropRange(DunGen.Graph.DungeonFlow flow, int id) {
-		foreach (var settings in flow.GlobalProps) {
+	private (int min,int max) GetGlobalPropRange(int id) {
+		foreach (var settings in this.flow.GlobalProps) {
 			if (settings.ID == id) return (settings.Count.Min,settings.Count.Max);
 		}
 		Plugin.LogError($"Global Prop bounds not found for id {id}");
 		return (0,1);
 	}
 	
-	protected void RegisterTileProps(Tile tile) {
-		if (tile == null) return;
+	protected void HandleProps() {
+		IEnumerable<PropSet> propsets = (
+			(IEnumerable<DTile>)this.GetComponentsInChildren<DTile>()
+		).SelectMany<DTile,PropSet,PropSet>(
+			(DTile t) => t.LocalPropSets,
+			(DTile t,PropSet pset) => pset
+		).Concat(this.globalPropSets.Values);
 		
-		DTile t = (DTile)tile;
-		foreach (DunGen.GlobalProp p in t.GlobalProps ?? []) {
-			this.AddProp(p);
-			p.gameObject.SetActive(false);
-		}
+		PropSet.Resolve(this, propsets);
 	}
 	
-	protected void HandleGlobalProps(DunGen.Graph.DungeonFlow flow) {
-		foreach (var entry in globalPropSpawns) {
-			int id = entry.Key;
-			var options = entry.Value;
-			List<DunGen.GlobalProp> actives = null; activeGlobalProps.TryGetValue(id,out actives);
-			
-			foreach (DunGen.GlobalProp prop in actives ?? []) {
-				prop.gameObject.SetActive(false);
-			}
-			activeGlobalProps[id] = new();
-			
-			(int min,int max) = GetPropRange(flow,id);
-			int count = this.rng.Next(min,max);
-			for (int i=0; i<count; i++) {
-				if (options.Count == 0) break;
-				int idx = this.rng.Next(options.Count);
-				var prop = options[idx];
-				options.RemoveAt(idx);
-				prop.gameObject.SetActive(true);
-				activeGlobalProps[id].Add(prop);
-			}
+	public PropSet GetGlobalPropSet(int id) {
+		PropSet propSet;
+		if (!globalPropSets.TryGetValue(id, out propSet)) {
+			propSet = new PropSet(this, GetGlobalPropRange(id));
+			globalPropSets.Add(id,propSet);
 		}
+		return propSet;
 	}
 	
 	public override IEnumerator GenerateCoroutine(ITileGenerator tilegen, int? seed) {
 		var dtilegen = (DungeonFlowConverter)tilegen;
+		this.flow = dtilegen.Flow;
 		var foo = (GameMap.GenerationCompleteDelegate)(
-			(GameMap m) => HandleGlobalProps(dtilegen.Flow)
+			// (GameMap m) => HandleGlobalProps(dtilegen.Flow)
+			(GameMap m) => HandleProps()
 		);
 		this.GenerationCompleteEvent += foo;
 		yield return StartCoroutine(base.GenerateCoroutine(tilegen,seed));
@@ -476,10 +697,13 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	public void FailedPlacementHandler(Tile tile) {
-		if (tile == null) this.tile_demand++;
+		if (tile == null) {
+			Plugin.LogDebug($"Placement failure - {tile}");
+			this.tile_demand++;
+		}
 	}
 	
-	public IEnumerable<PlacementInfo> Generator(GameMap map) {
+	public IEnumerable<GenerationAction> Generator(GameMap map) {
 		DunGen.Graph.GraphNode node = null;
 		foreach (var n in flow.Nodes) {
 			if (n.NodeType == DunGen.Graph.NodeType.Start) {node = n; break;}
@@ -500,6 +724,18 @@ public class DungeonFlowConverter : ITileGenerator {
 			
 			yield return new PlacementInfo(start);
 			this.tile_demand--;
+		} else {
+			Plugin.LogInfo($"Removing tiles...");
+			for (int i=0; i<5; i++) {
+				Tile[] tiles = map.GetComponentsInChildren<Tile>();
+				if (tiles.Length == 1) break;
+				Tile selected;
+				do {
+					selected = tiles[map.rng.Next(tiles.Length)];
+				} while (selected == start);
+				yield return new RemovalInfo(selected);
+			}
+			Plugin.LogInfo($"Done removing tiles!");
 		}
 		
 		PlacementInfo rt = new PlacementInfo();
@@ -528,15 +764,20 @@ public class DungeonFlowConverter : ITileGenerator {
 			// in a map, but I'm still a little unsure if I actually want to use that rule, since maps
 			// will often be larger than in vanilla in order to keep them more interesting. 
 			
+			Plugin.LogDebug($"Attempting to place {rt.NewTile}");
 			bool forelse = true;
 			for (int i=0; i<MAX_ATTEMPTS; i++) {
 				rt.NewDoorwayIdx = map.rng.Next(rt.NewTile.Doorways.Length);
-				rt.AttachmentPoint = map.GetLeaf(rt.NewTile.Doorways[rt.NewDoorwayIdx].Size);
+				var d = rt.NewTile.Doorways[rt.NewDoorwayIdx];
+				rt.AttachmentPoint = map.GetLeaf(d.Size);
 				if (rt.AttachmentPoint != null) {
-					Plugin.LogMessage($"Size connections: {rt.NewTile?.Doorways?[rt.NewDoorwayIdx]?.Size} - {rt.AttachmentPoint?.Size}");
+					Plugin.LogDebug(
+						$"Size connections: {rt.NewTile?.Doorways?[rt.NewDoorwayIdx]?.Size} - {rt.AttachmentPoint?.Size}"
+					);
 					forelse = false; break;
 				}
 			} if (forelse) {
+				Plugin.LogDebug("Exceeded max spawn attempts, getting new tile");
 				continue;
 			}
 			
