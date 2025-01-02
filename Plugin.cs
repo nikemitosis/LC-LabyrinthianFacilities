@@ -129,7 +129,14 @@ public class Plugin : BaseUnityPlugin {
 				case "CaveWaterTile":
 				case "CaveLongRampTile":
 				case "CaveYTile":
-					tile.transform.rotation *= Quaternion.Euler(270,0,0);
+					var rotation = Quaternion.Euler(270,0,0);
+					tile.transform.rotation *= rotation;
+					
+					var bounds = tile.TileBoundsOverride;
+					tile.TileBoundsOverride = new Bounds(
+						rotation * bounds.center,
+						rotation * bounds.size
+					);
 				break;
 			}
 			tile.gameObject.AddComponent<DTile>();
@@ -167,7 +174,7 @@ public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
-	private Dictionary<SelectableLevel,DGameMap> maps = null;
+	private Dictionary<SelectableLevel,Dictionary<DungeonFlow,DGameMap>> maps = null;
 	private DGameMap activeMap = null;
 	
 	public DGameMap ActiveMap {get {return activeMap;}}
@@ -180,7 +187,7 @@ public class MapHandler : NetworkBehaviour {
 		Plugin.InitializeCustomGenerator();
 		Instance = this;
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
-		maps = new Dictionary<SelectableLevel,DGameMap>();
+		maps = new Dictionary<SelectableLevel, Dictionary<DungeonFlow,DGameMap>>();
 		
 	}
 	public override void OnNetworkDespawn() {
@@ -198,26 +205,35 @@ public class MapHandler : NetworkBehaviour {
 		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
 	}
 	
-	public DGameMap NewMap(
+	public DGameMap GetMap(
 		SelectableLevel moon, 
+		DungeonFlow flow, 
+		GameMap.GenerationCompleteDelegate onComplete=null
+	) {
+		Dictionary<DungeonFlow,DGameMap> flowmaps;
+		DGameMap map;
+		if (!this.maps.TryGetValue(moon, out flowmaps)) {
+			this.maps.Add(moon,flowmaps=new Dictionary<DungeonFlow,DGameMap>());
+		}
+		if (!flowmaps.TryGetValue(flow,out map)) {
+			flowmaps.Add(flow, map=NewMap(onComplete));
+			map.name = $"map:{moon.name}:{flow.name}";
+		}
+		return map;
+	}
+	
+	public DGameMap NewMap(
 		GameMap.GenerationCompleteDelegate onComplete=null
 	) {
 		GameObject newmapobj;
 		DGameMap newmap;
-		if (maps.TryGetValue(moon,out newmap)) {
-			Plugin.LogWarning(
-				"Attempted to generate new moon on moon that was already generated"
-			);
-			return null;
-		}
-		Plugin.LogInfo($"Generating new moon for {moon.name}!");
-		newmapobj = new GameObject($"map:{moon.name}");
+		
+		newmapobj = new GameObject();
 		newmapobj.transform.SetParent(this.gameObject.transform);
 		newmapobj.transform.position -= Vector3.up * 200.0f;
 		
 		newmap = newmapobj.AddComponent<DGameMap>();
 		newmap.GenerationCompleteEvent += onComplete;
-		maps.Add(moon,newmap);
 		
 		newmap.TileInsertionEvent += MapHandler.TileInsertionFail;
 		
@@ -226,17 +242,14 @@ public class MapHandler : NetworkBehaviour {
 	
 	public IEnumerator Generate(
 		SelectableLevel moon, 
-		ITileGenerator tilegen, 
+		DungeonFlowConverter tilegen, 
 		int? seed=null,
 		GameMap.GenerationCompleteDelegate onComplete=null
 	) {
 		if (this.activeMap != null) this.activeMap.gameObject.SetActive(false);
 		
-		DGameMap map = null; 
-		if (!maps.TryGetValue(moon,out map)) {
-			map = NewMap(moon);
-		}
-		Plugin.LogInfo($"Generating tiles for {moon.name}");
+		DGameMap map = GetMap(moon,tilegen.Flow); 
+		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
 		map.gameObject.SetActive(true);
 		this.activeMap = map;
 		

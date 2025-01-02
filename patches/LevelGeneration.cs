@@ -19,13 +19,11 @@ class GenerateLevel {
 		Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
 		var flow = new DungeonFlowConverter(__instance.DungeonFlow);
 		
-		// int[] seed={369750209,1881379015};
-		// int i=0;
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			// seed[(i++)%2],
-			__instance.Seed,
+			1293754012,
+			// __instance.Seed,
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
 		

@@ -342,7 +342,6 @@ public class GameMap : MonoBehaviour {
 				this.TileInsertionEvent?.Invoke(this.AddTile((PlacementInfo)action));
 			} else if (action is RemovalInfo) {
 				var removal = (RemovalInfo)action;
-				this.TileRemovalEvent?.Invoke(removal.Target);
 				this.RemoveTile(removal);
 			} else {
 				throw new InvalidCastException($"Unknown GenerationAction: {action}");

@@ -223,7 +223,7 @@ public class TileProp : MonoBehaviour {
 		return IsBlocker && !DoorwayReference.IsVacant || IsConnector && DoorwayReference.IsVacant;
 	}}
 	public bool Ok {get {
-		if (this.gameObject.activeSelf && IsForcedOff) return false;
+		if (this.isActiveAndEnabled && IsForcedOff) return false;
 		foreach (var pset in propSets) {
 			if (!pset.Ok) return false;
 		}
@@ -234,14 +234,14 @@ public class TileProp : MonoBehaviour {
 		else return CanEnable;
 	}}
 	public bool CanEnable {get {
-		if (this.gameObject.activeSelf || IsForcedOff) return false;
+		if (this.isActiveAndEnabled || IsForcedOff) return false;
 		foreach (var pset in propSets) {
 			if (pset.NumActive + 1 > pset.Range.max) return false;
 		}
 		return true;
 	}}
 	public bool CanDisable {get {
-		if (!this.gameObject.activeSelf) return false;
+		if (!this.isActiveAndEnabled) return false;
 		foreach (var pset in propSets) {
 			if (pset.NumActive - 1 < pset.Range.min) return false;
 		}
@@ -390,6 +390,52 @@ public class PropSet {
 		uint iterationCount = 0;
 		Random rng = map.rng;
 		
+		// guarantee that easily-resolvable propsets are resolved
+		int idx=0;
+		while (idx < high.Count) {
+			var propset = high[idx];
+			
+			while (propset.High && propset.DisableRandomProp());
+			if (propset.Ok) {
+				high[idx] = high[high.Count-1];
+				high.RemoveAt(high.Count-1);
+				ok.Add(propset);
+			} else {
+				idx++;
+			}
+		}
+		idx=0;
+		while (idx < low.Count) {
+			var propset = low[idx];
+			
+			while (propset.Low && propset.EnableRandomProp());
+			if (propset.Ok) {
+				low[idx] = low[low.Count-1];
+				low.RemoveAt(low.Count-1);
+				ok.Add(propset);
+			} else {
+				idx++;
+			}
+		}
+		
+		// Check if any other sets have gone out of range
+		List<(PropSet pset, List<PropSet> dst)> moves = new();
+		foreach (PropSet pset in ok) {
+			if (pset.Low) {
+				moves.Add((pset,low));
+			} else if (pset.High) {
+				moves.Add((pset,high));
+			}
+		}
+		foreach (var move in moves) {
+			move.dst.Add(move.pset);
+			ok.Remove(move.pset);
+		}
+		Plugin.LogDebug(
+			$"{iterationCount} iterations: \n"
+			+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
+		);
+		
 		while (low.Count != 0 || high.Count != 0) {
 			// Resolve current issues
 			do {
@@ -405,14 +451,14 @@ public class PropSet {
 				PropSet target;
 				if (chooseHigh) {
 					target = high[rng.Next(high.Count)];
-					while (target.DisableRandomProp() && target.High);
+					while (target.High && target.DisableRandomProp());
 					if (target.Ok) {
 						high.Remove(target);
 						ok.Add(target);
 					}
 				} else {
 					target = low[rng.Next(low.Count)];
-					while (target.EnableRandomProp() && target.Low);
+					while (target.Low && target.EnableRandomProp());
 					if (target.Ok) {
 						low.Remove(target);
 						ok.Add(target);
@@ -427,6 +473,9 @@ public class PropSet {
 				}
 				if (iterationCount == 10000) {
 					Plugin.LogWarning("Aborted prop spawning after 10,000 iterations");
+					Plugin.LogWarning(
+						$"(Propsets: {ok.Count} ok, {low.Count} low, {high.Count} high)"
+					);
 					// Plugin.LogDebug($"low:");
 					// foreach (PropSet p in low) {
 						// p.Display();
@@ -441,7 +490,7 @@ public class PropSet {
 			} while (low.Count != 0 || high.Count != 0);
 			
 			// Check if any other sets have gone out of range
-			List<(PropSet pset, List<PropSet> dst)> moves = new();
+			moves = new();
 			foreach (PropSet pset in ok) {
 				if (pset.Low) {
 					moves.Add((pset,low));
@@ -471,9 +520,16 @@ public class DTile : Tile {
 	
 	// Private Helper Methods
 	private Bounds DeriveBounds() {
+		Bounds bounds;
+		var dungenTile = this.GetComponent<DunGen.Tile>();
+		if (dungenTile.OverrideAutomaticTileBounds) {
+			return dungenTile.TileBoundsOverride;
+		}
+		Plugin.LogDebug($"Tile {this.gameObject} had no predefined bounds");
+		
 		//subject to change, because why have consistency with what is the actual mesh of the room
 		//ajfshdlfjqew
-		Bounds bounds = new Bounds(Vector3.zero,Vector3.zero);
+		bounds = new Bounds(Vector3.zero,Vector3.zero);
 		// manor tiles all use mesh
 		// factory (typically) uses variety of these 3 (belt room is weird af)
 		Collider collider = (
@@ -728,7 +784,7 @@ public class DungeonFlowConverter : ITileGenerator {
 			Plugin.LogInfo($"Removing tiles...");
 			for (int i=0; i<5; i++) {
 				Tile[] tiles = map.GetComponentsInChildren<Tile>();
-				if (tiles.Length == 1) break;
+				if (tiles.Length <= 1) break;
 				Tile selected;
 				do {
 					selected = tiles[map.rng.Next(tiles.Length)];
