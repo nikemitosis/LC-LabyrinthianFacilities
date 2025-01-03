@@ -22,8 +22,8 @@ class GenerateLevel {
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			1293754012,
-			// __instance.Seed,
+			// 1293754012,
+			__instance.Seed,
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
 		
