@@ -1,6 +1,4 @@
-﻿// Fire exit doesn't spawn on offense mineshaft?
-
-namespace LabyrinthianFacilities;
+﻿namespace LabyrinthianFacilities;
 
 using DgConversion;
 
@@ -32,7 +30,9 @@ public class Plugin : BaseUnityPlugin {
 	
 	private static bool initializedAssets = false;
 	
+	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
 	private const uint PROMOTE_LOG = 0;
+	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
 	public static uint MIN_LOG = 0;
@@ -250,8 +250,12 @@ public class MapHandler : NetworkBehaviour {
 		
 		DGameMap map = GetMap(moon,tilegen.Flow); 
 		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
-		map.gameObject.SetActive(true);
 		this.activeMap = map;
+		this.activeMap.gameObject.SetActive(true);
+		
+		// Give map frame to activate so GameObjects don't freak out about being activated while 
+		// being destroyed
+		yield return null;
 		
 		map.GenerationCompleteEvent += onComplete;
 		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
@@ -266,7 +270,7 @@ public class MapHandler : NetworkBehaviour {
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveScrap() {
-		this.activeMap.PreserveScrap();
+		this.activeMap?.PreserveScrap();
 	}
 }
 
