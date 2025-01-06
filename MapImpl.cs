@@ -789,11 +789,14 @@ public class DungeonFlowConverter : ITileGenerator {
 				do {
 					selected = tiles[map.rng.Next(tiles.Length)];
 				} while (selected == start);
+				Plugin.LogDebug($"Removing {selected.name}");
 				yield return new RemovalInfo(selected);
 			}
-			Plugin.LogInfo($"Done removing tiles!");
+			Plugin.LogDebug($"Done removing tiles!");
 		}
 		
+		Plugin.LogInfo($"Placing tiles...");
+		uint iterationsSinceLastSuccess = 0;
 		PlacementInfo rt = new PlacementInfo();
 		while (tile_demand > 0) {
 			bool factoryStartRoomExists = map.transform.Find(
@@ -830,10 +833,18 @@ public class DungeonFlowConverter : ITileGenerator {
 					Plugin.LogDebug(
 						$"Size connections: {rt.NewTile?.Doorways?[rt.NewDoorwayIdx]?.Size} - {rt.AttachmentPoint?.Size}"
 					);
+					iterationsSinceLastSuccess = 0;
 					forelse = false; break;
 				}
 			} if (forelse) {
 				Plugin.LogDebug("Exceeded max spawn attempts, getting new tile");
+				iterationsSinceLastSuccess++;
+				if (iterationsSinceLastSuccess >= 500) {
+					Plugin.LogError(
+						$"Unable to generate map D: ({this.tile_demand} tiles were never placed)"
+					);
+					goto FailureCondition;
+				}
 				continue;
 			}
 			
@@ -841,6 +852,7 @@ public class DungeonFlowConverter : ITileGenerator {
 			this.tile_demand--;
 			yield return rt;
 		}
+		FailureCondition:
 		Plugin.LogInfo($"Done Generating Tiles!");
 	}
 	

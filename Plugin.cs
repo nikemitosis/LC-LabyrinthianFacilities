@@ -1,4 +1,6 @@
-﻿namespace LabyrinthianFacilities;
+﻿// ^(\[.{7}:((LabyrinthianFacilities)|( Unity Log))\] .*$)
+// (Logging regex)
+namespace LabyrinthianFacilities;
 
 using DgConversion;
 
@@ -23,7 +25,7 @@ using Random = System.Random;
 public class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.0.1";
+	public const string VERSION = "0.1.1";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -31,7 +33,7 @@ public class Plugin : BaseUnityPlugin {
 	private static bool initializedAssets = false;
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
-	private const uint PROMOTE_LOG = 0;
+	private const uint PROMOTE_LOG = 2;
 	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
@@ -253,10 +255,6 @@ public class MapHandler : NetworkBehaviour {
 		this.activeMap = map;
 		this.activeMap.gameObject.SetActive(true);
 		
-		// Give map frame to activate so GameObjects don't freak out about being activated while 
-		// being destroyed
-		yield return null;
-		
 		map.GenerationCompleteEvent += onComplete;
 		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
 		yield return map.GenerateCoroutine(tilegen,seed);
@@ -299,7 +297,7 @@ public class Scrap : MonoBehaviour {
 	
 	public void Preserve() {
 		this.FindParent();
-		this.gameObject.SetActive(false);
+		if (!this.Grabbable.isInShipRoom) this.gameObject.SetActive(false);
 	}
 	
 	public void Restore() {

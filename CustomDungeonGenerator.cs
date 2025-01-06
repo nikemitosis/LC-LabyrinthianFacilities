@@ -17,6 +17,7 @@ using Random = System.Random;
 public class Doorway : MonoBehaviour {
 	// Events
 	public event Action<Doorway> OnDisconnect;
+	public event Action<Doorway> OnDestroyEvent;
 	
 	// Properties
 	public Tile Tile {get {
@@ -37,8 +38,9 @@ public class Doorway : MonoBehaviour {
 	
 	// Monobehaviour Stuff
 	protected virtual void OnDestroy() {
-		if (connection == null) this.Tile?.Map?.RemoveLeaf(this);
-		else this.Disconnect();
+		if (connection != null) this.Disconnect();
+		
+		this.OnDestroyEvent?.Invoke(this);
 	}
 	
 	// Native Stuff
@@ -394,16 +396,18 @@ public class GameMap : MonoBehaviour {
 		try {
 			this.leaves[d.Size].Remove(d);
 		} catch (KeyNotFoundException _) {}
+		numLeaves--;
 	}
 	
 	public virtual Tile AddTile(PlacementInfo placement) {
 		Tile tile = placement.NewTile;
-		if (RootTile == null) {
+		if (this.RootTile == null) {
 			this.RootTile = tile.PlaceAsRoot(this.gameObject.transform);
 			foreach (Doorway d in this.RootTile.Doorways) {
 				AddLeaf(d);
+				subscribeToDoorwayEvents(d);
 			}
-			return RootTile;
+			return this.RootTile;
 		}
 		
 		List<Doorway> leafset = null;
@@ -425,10 +429,8 @@ public class GameMap : MonoBehaviour {
 		for (int i=0; i<newTile.Doorways.Length; i++) {
 			if (i != newTileTargetDoorwayIdx) {
 				this.AddLeaf(newTile.Doorways[i]);
-				newTile.Doorways[i].OnDisconnect += (Doorway d) => {
-					if (d.Tile.gameObject.activeInHierarchy) d.Tile.Map.AddLeaf(d);
-				};
 			}
+			subscribeToDoorwayEvents(newTile.Doorways[i]);
 		}
 		
 		return newTile;
@@ -439,6 +441,11 @@ public class GameMap : MonoBehaviour {
 			this.TileRemovalEvent?.Invoke(t);
 		}
 		GameObject.Destroy(removal.Target.gameObject);
+	}
+	
+	private void subscribeToDoorwayEvents(Doorway d) {
+		d.OnDisconnect += (Doorway d) => this.AddLeaf(d);
+		d.OnDestroyEvent += (Doorway d) => this.RemoveLeaf(d);
 	}
 	
 	// Possible optimization if necessary:
