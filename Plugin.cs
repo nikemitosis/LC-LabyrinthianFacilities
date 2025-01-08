@@ -33,11 +33,11 @@ public class Plugin : BaseUnityPlugin {
 	private static bool initializedAssets = false;
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
-	private const uint PROMOTE_LOG = 2;
+	private const uint PROMOTE_LOG = 0;
 	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
-	public static uint MIN_LOG = 0;
+	public static uint MIN_LOG = 1;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
@@ -261,8 +261,6 @@ public class MapHandler : NetworkBehaviour {
 		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
 		map.GenerationCompleteEvent -= onComplete;
 		
-		// every indoor enemy *appears* to use agentId 0
-		map.GenerateNavMesh(agentId: 0);
 	}
 	
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
@@ -276,7 +274,9 @@ public class MapHandler : NetworkBehaviour {
 // (but not maneater :P)
 public class Scrap : MonoBehaviour {
 	
-	public GrabbableObject Grabbable {get {return this.GetComponent<GrabbableObject>();}}
+	public GrabbableObject Grabbable {get {
+		return this.GetComponent<GrabbableObject>();
+	}}
 	
 	public void FindParent() {
 		if (this.Grabbable.isInShipRoom) return;
@@ -296,11 +296,28 @@ public class Scrap : MonoBehaviour {
 	}
 	
 	public void Preserve() {
+		var grabbable = this.Grabbable;
+		grabbable.isInShipRoom = StartOfRound.Instance.shipInnerRoomBounds.bounds.Contains(
+			grabbable.transform.position
+		); // fix isInShipRoom for people joining partway through a save
+		
 		this.FindParent();
-		if (!this.Grabbable.isInShipRoom) this.gameObject.SetActive(false);
+		
+		if (!grabbable.isInShipRoom) this.gameObject.SetActive(false);
+		if (grabbable.radarIcon != null && grabbable.radarIcon.gameObject != null) {
+			grabbable.radarIcon.gameObject.SetActive(false);
+		}
 	}
 	
 	public void Restore() {
 		this.gameObject.SetActive(true);
+		var grabbable = this.Grabbable;
+		if (
+			!grabbable.isInShipRoom 
+			&& grabbable.radarIcon != null 
+			&& grabbable.radarIcon.gameObject != null
+		) {
+			grabbable.radarIcon.gameObject.SetActive(true);
+		}
 	}
 }

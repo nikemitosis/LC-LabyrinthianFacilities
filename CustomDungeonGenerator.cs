@@ -14,6 +14,7 @@ using Unity.Netcode;
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
 
+// [Serializable]
 public class Doorway : MonoBehaviour {
 	// Events
 	public event Action<Doorway> OnDisconnect;
@@ -33,7 +34,9 @@ public class Doorway : MonoBehaviour {
 	// Protected/Private
 	protected bool initialized;
 	protected Tile tile;
+	// [SerializeField]
 	protected Vector2 size;
+	// [SerializeField]
 	protected Doorway connection;
 	
 	// Monobehaviour Stuff
@@ -72,9 +75,13 @@ public class Doorway : MonoBehaviour {
 		con.Disconnect();
 		this.OnDisconnect?.Invoke(this);
 	}
+	
+	// Serialization
+	
 }
 
-public class Tile : MonoBehaviour {
+// [Serializable]
+public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 	// Delegates & Events
 	public delegate void TileReactionDelegate(Tile tile);
 	public event TileReactionDelegate TileInstantiatedEvent;
@@ -105,17 +112,10 @@ public class Tile : MonoBehaviour {
 	public Bounds BoundingBox {get {return this.bounding_box;}}
 	public GameMap Map {get {return this.GetComponentInParent<GameMap>();}}
 	
-	// public NavMeshBuildSource[] Navigables {get {return this.navigables;}}
-	// public NavMeshLinkData[] Links {get {return this.links;}}
-	
 	// Protected/Private
 	protected Doorway[] doorways = null;
 	protected Bounds bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 	protected bool initialized = false;
-	
-	// protected NavMeshBuildSource[] navigables = new NavMeshBuildSource[0];
-	// protected NavMeshLinkData[] links = new NavMeshLinkData[0];
-	
 	
 	// Native Methods
 	public Tile Instantiate(Transform parent=null) {
@@ -124,7 +124,6 @@ public class Tile : MonoBehaviour {
 		
 		// rotation & position handled internally, do not inherit from parent
 		newtile.transform.SetParent(parent,worldPositionStays: true);
-		// newtile.RotateBy(this.transform.localRotation);
 		
 		newtile.Initialize();
 		TileInstantiatedEvent?.Invoke(newtile);
@@ -133,7 +132,6 @@ public class Tile : MonoBehaviour {
 	
 	// Do placement-independent initializtion here (including bounds, since bounds are 
 	// affected by MoveTo and RotateBy
-	// Do *not* do navmesh stuff here
 	protected virtual void Initialize() {
 		if (initialized) return;
 		initialized = true;
@@ -230,6 +228,18 @@ public class Tile : MonoBehaviour {
 		this.OnConnect?.Invoke(this);
 		return tile;
 	}
+	
+	// Serialization
+	/* private string tileName;
+	public override void OnBeforeSerialize() {
+		// ensure field is initialized
+		var _ = this.Doorways;
+		this.tileName = this.name.Substring(0,this.name.Count - 7);
+	}
+	
+	public override void OnAfterSerialize() {
+		return;
+	} */
 }
 
 public abstract class GenerationAction {}
@@ -280,6 +290,7 @@ public interface ITileGenerator {
 	}
 }
 
+// [Serializable]
 public class GameMap : MonoBehaviour {
 	
 	// Delegates & Events
@@ -308,12 +319,12 @@ public class GameMap : MonoBehaviour {
 	
 	
 	// Protected/Private
+	// [SerializeField]
 	protected Tile rootTile;
 	
 	private Dictionary<Vector2,List<Doorway>> leaves;
 	private int numLeaves = 0;
 	protected NavMeshSurface navSurface;
-	protected NavMeshDataInstance navInstance;
 	
 	private int _seed;
 	public Random rng {get; private set; }
@@ -326,8 +337,11 @@ public class GameMap : MonoBehaviour {
 		
 		this.navSurface = this.gameObject.AddComponent<NavMeshSurface>();
 		this.navSurface.collectObjects = CollectObjects.Children;
-		this.navSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
-		// ^NavMeshCollectGeometry.PhysicsColliders cause scrap from previous days to block navigation
+		// this.navSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
+		this.navSurface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
+		// ^NavMeshCollectGeometry.PhysicsColliders cause some scrap from previous days to block 
+		// navigation (e.g. V-Type Engine)
+		// NavmeshCollectGeometry.RenderMeshes causes the manor start tile to be unenterable/exitable
 	}
 	
 	protected virtual void OnDestroy() {
@@ -363,7 +377,7 @@ public class GameMap : MonoBehaviour {
 		if (size == null) {
 			int idx = idxn ?? this.rng.Next(numLeaves);
 			
-			//order not guaranteed...
+			// order not guaranteed...
 			foreach (var kvpair in this.leaves) {
 				if (idx < kvpair.Value.Count) return kvpair.Value[idx];
 				idx -= kvpair.Value.Count;
@@ -456,4 +470,5 @@ public class GameMap : MonoBehaviour {
 		this.navSurface.BuildNavMesh();
 		this.navSurface.AddData();
 	}
+	
 }

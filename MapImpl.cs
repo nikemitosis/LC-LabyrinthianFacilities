@@ -248,6 +248,13 @@ public class TileProp : MonoBehaviour {
 		return true;
 	}}
 	
+	public void RegisterSet(PropSet ps) {
+		this.propSets.Add(ps);
+	}
+	public void UnregisterSet(PropSet ps) {
+		this.propSets.Remove(ps);
+	}
+	
 	private void OnEnable()  {this.OnEnableEvent ?.Invoke(this);}
 	private void OnDisable() {this.OnDisableEvent?.Invoke(this);}
 	private void OnDestroy() {this.OnDestroyEvent?.Invoke(this);}
@@ -331,12 +338,14 @@ public class PropSet {
 		p.OnDisableEvent += this.PropDisabled;
 		p.OnEnableEvent += this.PropEnabled; 
 		p.OnDestroyEvent += this.RemoveProp;
+		p.RegisterSet(this);
 	}
 	public void RemoveProp(TileProp p) {
 		this.props.Remove(p);
 		p.OnDisableEvent -= this.PropDisabled;
 		p.OnEnableEvent -= this.PropEnabled;
 		p.OnDestroyEvent -= this.RemoveProp;
+		p.UnregisterSet(this);
 		if (this.activeProps   != null) this.activeProps.Remove(p);
 		if (this.inactiveProps != null) this.inactiveProps.Remove(p);
 	}
@@ -642,7 +651,7 @@ public class DGameMap : GameMap {
 	protected override void Awake() {
 		base.Awake();
 		
-		this.GenerationCompleteEvent += this.RestoreScrap;
+		this.GenerationCompleteEvent += DGameMap.GenerationCompleteHandler;
 		globalPropSets = new();
 	}
 	
@@ -687,13 +696,20 @@ public class DGameMap : GameMap {
 		this.GenerationCompleteEvent -= foo;
 	}
 	
+	private static void GenerationCompleteHandler(GameMap m) {
+		var map = (DGameMap)m;
+		// every indoor enemy *appears* to use agentId 0
+		map.GenerateNavMesh(agentId: 0);
+		map.RestoreScrap();
+	}
+	
 	public void PreserveScrap() {
 		foreach (Scrap obj in GameObject.FindObjectsByType<Scrap>(FindObjectsSortMode.None)) {
 			obj.Preserve();
 		}
 	}
 	
-	public void RestoreScrap(GameMap m) {
+	public void RestoreScrap() {
 		foreach (Scrap obj in this.GetComponentsInChildren<Scrap>(includeInactive: true)) {
 			obj.Restore();
 		}
@@ -788,7 +804,7 @@ public class DungeonFlowConverter : ITileGenerator {
 				Tile selected;
 				do {
 					selected = tiles[map.rng.Next(tiles.Length)];
-				} while (selected == start);
+				} while (selected == map.RootTile);
 				Plugin.LogDebug($"Removing {selected.name}");
 				yield return new RemovalInfo(selected);
 			}
@@ -799,8 +815,10 @@ public class DungeonFlowConverter : ITileGenerator {
 		uint iterationsSinceLastSuccess = 0;
 		PlacementInfo rt = new PlacementInfo();
 		while (tile_demand > 0) {
-			bool factoryStartRoomExists = map.transform.Find(
+			bool startRoomExists = map.transform.Find(
 				"ElevatorConnector(Clone)/ElevatorDoorway/StartRoom(Clone)"
+			) || map.transform.Find(
+				"Level2StartRoomConnector(Clone)/ElevatorDoorway/ManorStartRoom(Clone)"
 			);
 			do {
 				int i = -1;
@@ -813,12 +831,14 @@ public class DungeonFlowConverter : ITileGenerator {
 			} while (
 				rt.NewTile == start 
 				|| (
-					factoryStartRoomExists
-					&& rt.NewTile.gameObject.name == "StartRoom"
+					(
+						rt.NewTile.gameObject.name == "StartRoom"
+						|| rt.NewTile.gameObject.name == "ManorStartRoom"
+					) && startRoomExists
 				)
 			);
 			// RHS of condition is temporary fix to stop start room from spawning multiple times
-			// since it *technically* isn't the start room in the factory layout
+			// since it *technically* isn't the start room in the factory/manor layout
 			// This won't be necessary if we enforce the rule that certain rooms can only spawn once 
 			// in a map, but I'm still a little unsure if I actually want to use that rule, since maps
 			// will often be larger than in vanilla in order to keep them more interesting. 

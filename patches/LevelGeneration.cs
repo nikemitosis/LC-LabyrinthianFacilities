@@ -2,6 +2,7 @@ namespace LabyrinthianFacilities.Patches;
 using DgConversion;
 
 using System;
+using System.Collections.Generic;
 
 using HarmonyLib;
 
@@ -22,7 +23,7 @@ class GenerateLevel {
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			// 1293754012,
+			// 1577760641,
 			__instance.Seed,
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
@@ -45,5 +46,14 @@ class PreserveScrapPatch {
 	public static void PreserveScrap() {
 		Plugin.LogInfo("Hiding scrap!");
 		MapHandler.Instance.PreserveScrap();
+	}
+}
+
+[HarmonyPatch(typeof(StormyWeather))]
+class FixLightningStrikingInactiveScrapPatch {
+	[HarmonyPatch("GetMetalObjectsAfterDelay")]
+	[HarmonyPrefix]
+	public static void ResetMetalScrapBuffer(ref List<GrabbableObject> ___metalObjects) {
+		___metalObjects = new();
 	}
 }
