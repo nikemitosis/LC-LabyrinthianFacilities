@@ -54,6 +54,24 @@ class FixLightningStrikingInactiveScrapPatch {
 	[HarmonyPatch("GetMetalObjectsAfterDelay")]
 	[HarmonyPrefix]
 	public static void ResetMetalScrapBuffer(ref List<GrabbableObject> ___metalObjects) {
-		___metalObjects = new();
+		___metalObjects.Clear();
 	}
 }
+
+[HarmonyPatch(typeof(GameNetworkManager))]
+class SaveMapsPatch {
+	[HarmonyPatch("SaveGame")]
+	[HarmonyPrefix]
+	public static void SaveMaps() {
+		MapHandler.Instance.SaveGame();
+	}
+}
+
+/* [HarmonyPatch(typeof(StartOfRound))]
+class SendMapsToClientPatch {
+	[HarmonyPatch("OnClientConnect")]
+	[HarmonyPrefix]
+	public static void SendMaps(ulong clientId) {
+		MapHandler.Instance.SendMapDataToClient(clientId);
+	}
+} */

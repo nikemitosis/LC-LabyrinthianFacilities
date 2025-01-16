@@ -1,6 +1,7 @@
 namespace LabyrinthianFacilities.DgConversion;
 
 using BoundsExtensions;
+using Serialization;
 using Util;
 
 using System;
@@ -89,6 +90,10 @@ public class DDoorway : Doorway {
 		base.Initialize();
 		this.InitSize();
 		this.fixRotation();
+		
+		if (this.Tile == null) {
+			throw new NullReferenceException($"DDoorway has no parent tile");
+		}
 		
 		var dg = this.GetComponent<DunGen.Doorway>();
 		List<GameObject> objs = new();
@@ -189,6 +194,7 @@ public class DDoorway : Doorway {
 	}
 	private static void DisconnectAction(Doorway door) {
 		var d = (DDoorway)door;
+		if (d == null) return;
 		foreach (GameObject o in d.alwaysBlockers) {
 			o.SetActive(true);
 		}
@@ -589,10 +595,14 @@ public class DTile : Tile {
 		return bounds;
 	}
 	
-	protected override void Initialize() {
+	public override void Initialize() {
 		if (this.Initialized) return;
 		base.Initialize();
 		this.Initialized = true;
+		
+		if (this.Map == null) {
+			throw new NullReferenceException($"DTile has no parent map");
+		}
 		
 		// Bounds
 		Plugin.LogDebug("Getting bounds...");
@@ -687,10 +697,7 @@ public class DGameMap : GameMap {
 	public override IEnumerator GenerateCoroutine(ITileGenerator tilegen, int? seed) {
 		var dtilegen = (DungeonFlowConverter)tilegen;
 		this.flow = dtilegen.Flow;
-		var foo = (GameMap.GenerationCompleteDelegate)(
-			// (GameMap m) => HandleGlobalProps(dtilegen.Flow)
-			(GameMap m) => HandleProps()
-		);
+		var foo = (GameMap m) => HandleProps();
 		this.GenerationCompleteEvent += foo;
 		yield return StartCoroutine(base.GenerateCoroutine(tilegen,seed));
 		this.GenerationCompleteEvent -= foo;
@@ -813,7 +820,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		Plugin.LogInfo($"Placing tiles...");
 		uint iterationsSinceLastSuccess = 0;
-		PlacementInfo rt = new PlacementInfo();
+		PlacementInfo rt = new PlacementInfo(null);
 		while (tile_demand > 0) {
 			bool startRoomExists = map.transform.Find(
 				"ElevatorConnector(Clone)/ElevatorDoorway/StartRoom(Clone)"
@@ -877,3 +884,5 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 }
+
+public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {}

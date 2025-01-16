@@ -4,6 +4,68 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 
+public static class SerializationHelper {
+	// Define our own GetBytes methods to avoid problems of endianness
+	// + convenience of doing x.GetBytes() instead of BitConverter.GetBytes(x)
+	
+	// Little Endian
+	public static byte[] GetBytes(this ushort x) {
+		return new byte[]{
+			(byte)(x << 0),
+			(byte)(x << 8)
+		};
+	}
+	
+	// Little Endian
+	public static byte[] GetBytes(this int x) {
+		return new byte[]{
+			(byte)(x << 00),
+			(byte)(x << 08),
+			(byte)(x << 16),
+			(byte)(x << 24)
+		};
+	}
+	
+	public static byte[] GetBytes(this float x) {
+		return BitConverter.GetBytes(x);
+	}
+	
+	// UTF-8
+	public static byte[] GetBytes(this string str) {
+		if (str == null) return new byte[0];
+		
+		var rt = new byte[str.Length];
+		for (int i=0; i<str.Length; i++) {
+			if (str[i] > 0xFF) {
+				throw new ArgumentOutOfRangeException(
+					$"Cannot coerce value {(int)(str[i])} to UTF-8"
+				);
+			}
+			rt[i] = (byte)(str[i]);
+		}
+		return rt;
+	}
+	
+	public static void CastInto(this byte[] bytes, out string str) {
+		str = System.Text.Encoding.UTF8.GetString(bytes);
+	}
+	public static void CastInto(this byte[] bytes, out ushort o) {
+		o = (ushort)(bytes[1] << 8 | bytes[0]);
+	}
+	public static void CastInto(this byte[] bytes, out int o) {
+		o = (
+			  (int)bytes[3] << 24
+			| (int)bytes[2] << 16
+			| (int)bytes[1] << 8
+			| (int)bytes[0]
+		);
+	}
+	public static void CastInto(this byte[] bytes, out float o) {
+		// Sometimes, bitconverter is nice after all
+		o = BitConverter.ToSingle(bytes,0);
+	}
+}
+
 public class WeightedList<T> : IEnumerable<T> {
 	
 	public sealed class ItemEnumerator : IEnumerator<T> {
@@ -81,7 +143,7 @@ public class WeightedList<T> : IEnumerable<T> {
 			summedWeight -= weight;
 			weights.RemoveAt(idx);
 			return true;
-		} catch (ArgumentOutOfRangeException ex) {
+		} catch (ArgumentOutOfRangeException) {
 			weight = default(float);
 			return false;
 		}

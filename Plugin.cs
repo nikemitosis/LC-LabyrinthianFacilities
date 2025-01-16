@@ -3,10 +3,13 @@
 namespace LabyrinthianFacilities;
 
 using DgConversion;
+using Serialization;
+using Util;
 
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Reflection;
 
 using BepInEx;
@@ -27,17 +30,19 @@ public class Plugin : BaseUnityPlugin {
 	public const string NAME = "LabyrinthianFacilities";
 	public const string VERSION = "0.1.1";
 	
+	public const string SAVES_PATH = $"BepInEx/plugins/{NAME}/saves";
+	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
 	
 	private static bool initializedAssets = false;
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
-	private const uint PROMOTE_LOG = 0;
+	private static uint PROMOTE_LOG = 2;
 	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
-	public static uint MIN_LOG = 1;
+	public static uint MIN_LOG = 0;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
@@ -157,26 +162,14 @@ public class Plugin : BaseUnityPlugin {
 		}
 	}
 	
-	
-	public static IEnumerator DebugWait() {
-		Transform body = StartOfRound.Instance.localPlayerController.thisPlayerBody;
-		while (body.position[1] > -100) yield return new WaitForSeconds(0.5f);
-		while (body.position[1] < -100) yield return new WaitForSeconds(0.05f);
-	}
-	
-	public static Tile DebugGetTile(string name) {
-		foreach (Tile t in Resources.FindObjectsOfTypeAll<Tile>()) {
-			if (t.gameObject.name == name) return t;
-		}
-		return null;
-	}
 }
 
-public class MapHandler : NetworkBehaviour {
+public class MapHandler : NetworkBehaviour, ISerializable {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
-	private Dictionary<SelectableLevel,Dictionary<DungeonFlow,DGameMap>> maps = null;
+	private Dictionary<(SelectableLevel level, DungeonFlow flow),DGameMap> maps = null;
+	private Dictionary<string,DGameMap> unresolvedMaps;
 	private DGameMap activeMap = null;
 	
 	public DGameMap ActiveMap {get {return activeMap;}}
@@ -189,8 +182,9 @@ public class MapHandler : NetworkBehaviour {
 		Plugin.InitializeCustomGenerator();
 		Instance = this;
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
-		maps = new Dictionary<SelectableLevel, Dictionary<DungeonFlow,DGameMap>>();
-		
+		maps = new();
+		unresolvedMaps = new();
+		LoadGame();
 	}
 	public override void OnNetworkDespawn() {
 		MapHandler.Instance = null;
@@ -207,25 +201,32 @@ public class MapHandler : NetworkBehaviour {
 		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
 	}
 	
+	public bool TryGetUnresolvedMap(string key, out DGameMap map) {
+		if (unresolvedMaps.TryGetValue(key,out map)) {
+			unresolvedMaps.Remove(key);
+			return true;
+		}
+		return false;
+	}
+	
 	public DGameMap GetMap(
 		SelectableLevel moon, 
 		DungeonFlow flow, 
-		GameMap.GenerationCompleteDelegate onComplete=null
+		Action<GameMap> onComplete=null
 	) {
-		Dictionary<DungeonFlow,DGameMap> flowmaps;
 		DGameMap map;
-		if (!this.maps.TryGetValue(moon, out flowmaps)) {
-			this.maps.Add(moon,flowmaps=new Dictionary<DungeonFlow,DGameMap>());
-		}
-		if (!flowmaps.TryGetValue(flow,out map)) {
-			flowmaps.Add(flow, map=NewMap(onComplete));
+		if (
+			!this.maps.TryGetValue((moon,flow), out map) 
+			&& !TryGetUnresolvedMap($"map:{moon.name}:{flow.name}", out map)
+		) {
+			this.maps.Add((moon,flow), map=NewMap(onComplete));
 			map.name = $"map:{moon.name}:{flow.name}";
 		}
 		return map;
 	}
 	
 	public DGameMap NewMap(
-		GameMap.GenerationCompleteDelegate onComplete=null
+		Action<GameMap> onComplete=null
 	) {
 		GameObject newmapobj;
 		DGameMap newmap;
@@ -246,27 +247,101 @@ public class MapHandler : NetworkBehaviour {
 		SelectableLevel moon, 
 		DungeonFlowConverter tilegen, 
 		int? seed=null,
-		GameMap.GenerationCompleteDelegate onComplete=null
+		Action<GameMap> onComplete=null
 	) {
 		if (this.activeMap != null) this.activeMap.gameObject.SetActive(false);
 		
 		DGameMap map = GetMap(moon,tilegen.Flow); 
-		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
 		this.activeMap = map;
 		this.activeMap.gameObject.SetActive(true);
 		
 		map.GenerationCompleteEvent += onComplete;
 		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
+		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
 		yield return map.GenerateCoroutine(tilegen,seed);
 		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
 		map.GenerationCompleteEvent -= onComplete;
-		
 	}
 	
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveScrap() {
 		this.activeMap?.PreserveScrap();
+	}
+	
+	public void SaveGame() {
+		if (!(base.IsServer || base.IsHost)) return;
+		Plugin.LogInfo("Saving maps!");
+		try {
+			Directory.CreateDirectory(Plugin.SAVES_PATH);
+		} catch (IOException) {
+			Plugin.LogError("Could not load save; path to saves folder was interrupted by a file");
+			throw;
+		}
+		
+		string fileName = $"{Plugin.SAVES_PATH}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
+		using (FileStream fs = File.Open(fileName, FileMode.Create)) {
+			var s = new Serializer();
+			s.Serialize(this);
+			s.SaveToFile(fs);
+		}
+	}
+	public void LoadGame() {
+		if (!(base.IsServer || base.IsHost)) return;
+		Plugin.LogInfo($"Loading save data!");
+		try {
+			string fileName = $"{Plugin.SAVES_PATH}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
+			byte[] bytes = null;
+			using (FileStream fs = File.Open(fileName, FileMode.Open)) {
+				bytes = new byte[fs.Length];
+				if (fs.Read(bytes,0,(int)fs.Length) != fs.Length) {
+					Plugin.LogError($"Did not read as many bytes from file as were in the file?");
+				}
+			}
+			new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+			foreach (var entry in this.unresolvedMaps) {
+				entry.Value.gameObject.SetActive(false);
+			}
+		} catch (IOException) {
+			Plugin.LogInfo($"No save data found for {GameNetworkManager.Instance.currentSaveFileName}");
+		}
+	}
+	public void LoadMap(DGameMap m) {
+		m.transform.parent = this.transform;
+		m.transform.position -= Vector3.up * 200.0f;
+		this.unresolvedMaps.Add(m.name,m);
+	}
+	
+	public void SendMapDataToClient(ulong clientId) {
+		if (!(base.IsServer || base.IsHost)) return;
+		var cparams = new ClientRpcParams {
+			Send = new ClientRpcSendParams {
+				TargetClientIds = new ulong[]{clientId}
+			}
+		};
+		var s = new Serializer();
+		s.Serialize(this);
+		byte[] b = new byte[s.Output.Count];
+		s.Output.CopyTo(b,0);
+		LoadMapsClientRpc(b, cparams);
+	}
+	
+	[ClientRpc]
+	protected void LoadMapsClientRpc(byte[] bytes, ClientRpcParams cparams=default) {
+		new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+	}
+	
+	public IEnumerable<SerializationToken> Serialize() {
+		yield return new SerializationToken(
+			((ushort)(this.maps.Count)).GetBytes(), 
+			isStartOf: this
+		);
+		foreach (var entry in this.maps) {
+			var map = entry.Value;
+			yield return new SerializationToken(
+				referenceTo: map
+			);
+		}
 	}
 }
 
@@ -319,5 +394,37 @@ public class Scrap : MonoBehaviour {
 		) {
 			grabbable.radarIcon.gameObject.SetActive(true);
 		}
+	}
+}
+
+public class MapHandlerDeserializer : IDeserializer<MapHandler> {
+	public virtual MapHandler Deserialize(
+		ISerializable baseObj, DeserializationContext dc, object extraContext=null
+	) {
+		if (!ReferenceEquals(baseObj, MapHandler.Instance)) {
+			((MapHandler)baseObj).GetComponent<NetworkObject>().Despawn(true);
+		}
+		dc.Consume(2).CastInto(out ushort numMaps);
+		
+		// Captures for lambda
+		var rt = MapHandler.Instance;
+		var mapDeserializer = new DGameMapDeserializer();
+		var tileDeserializer = new TileDeserializer<DTile>();
+		for (int i=0; i<numMaps; i++) {
+			dc.Consume(4).CastInto(out int refAddress);
+			dc.EnqueueDependency(
+				refAddress, 
+				mapDeserializer, 
+				(ISerializable s) => rt.LoadMap((DGameMap)s),
+				tileDeserializer
+			);
+		}
+		
+		return rt;
+	}
+	public virtual MapHandler Deserialize(
+		DeserializationContext dc, object extraContext=null
+	) {
+		return Deserialize(MapHandler.Instance,dc,extraContext);
 	}
 }

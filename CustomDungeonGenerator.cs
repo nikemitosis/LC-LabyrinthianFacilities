@@ -1,6 +1,8 @@
 namespace LabyrinthianFacilities;
 
 using BoundsExtensions;
+using Serialization;
+using Util;
 
 using System;
 using System.Collections;
@@ -13,8 +15,8 @@ using Unity.Netcode;
 
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
+using ISerializable = LabyrinthianFacilities.Serialization.ISerializable;
 
-// [Serializable]
 public class Doorway : MonoBehaviour {
 	// Events
 	public event Action<Doorway> OnDisconnect;
@@ -30,13 +32,12 @@ public class Doorway : MonoBehaviour {
 		get {return this.initialized;} 
 		protected set {this.initialized = value;}
 	}
+	public Doorway Connection {get {return this.connection;}}
 	
 	// Protected/Private
 	protected bool initialized;
 	protected Tile tile;
-	// [SerializeField]
 	protected Vector2 size;
-	// [SerializeField]
 	protected Doorway connection;
 	
 	// Monobehaviour Stuff
@@ -75,20 +76,9 @@ public class Doorway : MonoBehaviour {
 		con.Disconnect();
 		this.OnDisconnect?.Invoke(this);
 	}
-	
-	// Serialization
-	
 }
 
-// [Serializable]
-public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
-	// Delegates & Events
-	public delegate void TileReactionDelegate(Tile tile);
-	public event TileReactionDelegate TileInstantiatedEvent;
-	public event TileReactionDelegate OnMove;
-	public event TileReactionDelegate OnConnect;
-	
-	
+public class Tile : MonoBehaviour, ISerializable {
 	// Properties
 	public bool Initialized {
 		get { return initialized; }
@@ -106,6 +96,8 @@ public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 		}
 	}
 	
+	public bool IsPrefab {get {return !this.gameObject.scene.IsValid();}}
+	
 	public Doorway[] Doorways {
 		get {return this.doorways ??= this.GetComponentsInChildren<Doorway>();}
 	}
@@ -122,17 +114,18 @@ public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 		var newtile = GameObject.Instantiate(this.gameObject).GetComponent<Tile>();
 		newtile.bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 		
-		// rotation & position handled internally, do not inherit from parent
-		newtile.transform.SetParent(parent,worldPositionStays: true);
-		
+		newtile.transform.parent = parent;
+		Plugin.LogFatal($"parent: {newtile.transform.parent}");
+		Plugin.LogFatal($"parent component: {newtile.transform.parent.GetComponent<GameMap>()}");
+		Plugin.LogFatal($"component in parent: {newtile.GetComponentInParent<GameMap>()}");
+		Plugin.LogFatal($"map: {newtile.Map}");
 		newtile.Initialize();
-		TileInstantiatedEvent?.Invoke(newtile);
 		return newtile;
 	}
 	
 	// Do placement-independent initializtion here (including bounds, since bounds are 
 	// affected by MoveTo and RotateBy
-	protected virtual void Initialize() {
+	public virtual void Initialize() {
 		if (initialized) return;
 		initialized = true;
 		return;
@@ -163,8 +156,8 @@ public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 		return tbb.Intersects(obb) && obb.size != Vector3.zero && tbb.size != Vector3.zero;
 	}
 	
-	// WARNING: Bounding box increases *permanantly* with most calls. This should only be called once
-	// per tile. Should eventually move away from AABB anyway... 
+	// WARNING: Bounding box increases *permanantly* with most calls. This should really only be 
+	// called once per tile. Should eventually move away from AABB anyway... 
 	// the only exception to this warning is 90x degree rotations
 	public void RotateBy(Quaternion quat) {
 		Vector3 diff = this.bounding_box.center - this.transform.position;
@@ -180,26 +173,24 @@ public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 		
 		this.bounding_box.center = pos;
 		this.transform.position = pos + diff;
+	}
+	
+	public bool PlaceAsRoot(Transform parent) {
+		this.transform.parent = parent;
+		this.MoveTo(parent.position);
+		return true;
+	}
 		
-		this.OnMove?.Invoke(this);
-	}
-	
-	public Tile PlaceAsRoot(Transform parent) {
-		Tile rt = this.Instantiate(parent);
-		rt.MoveTo(parent.position);
-		return rt;
-	}
-	
-	
-	public Tile Place(int thisDoorwayIdx, Doorway other) {
+	public bool Place(int thisDoorwayIdx, Doorway other) {
 		if (thisDoorwayIdx >= this.Doorways.Length) {
 			throw new IndexOutOfRangeException(
 				$"Door index of new tile out of range. Tried to select idx {thisDoorwayIdx} with only {this.Doorways.Length} doors. "
 			);
 		}
 		
-		var tile = this.Instantiate(parent: other.transform);
-		var thisDoorway = tile.Doorways[thisDoorwayIdx];
+		Transform oldParent = this.transform.parent;
+		this.transform.parent = other.transform;
+		var thisDoorway = this.Doorways[thisDoorwayIdx];
 		
 		// Undo this rotation, do other rotation, do 180 about vertical axis
 		Quaternion rotation = (
@@ -209,37 +200,74 @@ public class Tile : MonoBehaviour/* , ISerializationCallbackReceiver */ {
 		);
 		
 		
-		tile.RotateBy(rotation);
+		this.RotateBy(rotation);
 		
 		// local position accounts for parent rotation, which makes sense, 
 		// but fucking confused me for so long
-		Vector3 doorLocalPos = thisDoorway.transform.position - tile.bounding_box.center;
-		tile.MoveTo(
+		Vector3 doorLocalPos = thisDoorway.transform.position - this.bounding_box.center;
+		this.MoveTo(
 			other.transform.position - doorLocalPos
 		);
-		foreach (Tile t in tile.GetComponentInParent<GameMap>().GetComponentsInChildren<Tile>()) {
-			if (tile.Intersects(t) && !object.ReferenceEquals(t,tile)) {
-				// tile.transform.SetParent(null);
-				GameObject.Destroy(tile.gameObject);
-				return null;
+		foreach (Tile t in this.Map.GetComponentsInChildren<Tile>()) {
+			if (this.Intersects(t) && !object.ReferenceEquals(t,this)) {
+				this.transform.SetParent(oldParent);
+				return false;
 			}
 		}
 		thisDoorway.Connect(other);
-		this.OnConnect?.Invoke(this);
-		return tile;
+		return true;
 	}
 	
-	// Serialization
-	/* private string tileName;
-	public override void OnBeforeSerialize() {
-		// ensure field is initialized
-		var _ = this.Doorways;
-		this.tileName = this.name.Substring(0,this.name.Count - 7);
+	// Should be null-terminated! (Unless deserialization is overridden)
+	public virtual byte[] GetSerializationId() {
+		return (this.name.Substring(0,this.name.Length - "(Clone)".Length) + "\0").GetBytes();
 	}
 	
-	public override void OnAfterSerialize() {
-		return;
-	} */
+	// This should be a virtual static method. Too bad!
+	public virtual Tile GetPrefab(object ident) {
+		return Tile.GetPrefab((string)ident);
+	}
+	public static Tile GetPrefab(string id) {
+		foreach (Tile t in Resources.FindObjectsOfTypeAll(typeof(Tile))) {
+			if (t.name == id && !t.gameObject.scene.IsValid()) {
+				return t;
+			}
+		}
+		return null;
+	}
+	
+	/* Format:
+	 *  string prefabIdentifier
+	 *      Defaulting to prefab name, cuz I don't know a more reliably unique identifier
+	 *      that's also consistent with different tiles being added/removed
+	 *  (Tile*, int)[] doorways
+	 *		{Tile*	connection
+	 *		int		doorwayIndex}
+	*/
+	public virtual IEnumerable<SerializationToken> Serialize() {
+		
+		// prefabIdentifier
+		yield return new SerializationToken(
+			this.GetSerializationId(),
+			isStartOf: this
+		);
+		
+		// ushort doorways.length
+		yield return ((ushort)this.Doorways.Length).GetBytes();
+		foreach (Doorway d in this.Doorways) {
+			// Tile* connection
+			yield return new SerializationToken(referenceTo: d.Connection?.Tile);
+			
+			// int doorwayIndex
+			if (d.Connection == null) {
+				yield return ((ushort)0).GetBytes();
+			} else {
+				yield return ((ushort)Array.IndexOf(
+					d.Connection.Tile.Doorways, d.Connection
+				)).GetBytes();
+			}
+		}
+	}
 }
 
 public abstract class GenerationAction {}
@@ -266,7 +294,7 @@ public class PlacementInfo : GenerationAction {
 		}
 	}
 	
-	public PlacementInfo(Tile nt=null, int ndi=0, Doorway ap=null) {
+	public PlacementInfo(Tile nt, int ndi=0, Doorway ap=null) {
 		newtile = nt;
 		newDoorwayIdx = ndi;
 		attachmentPoint = ap;
@@ -290,8 +318,7 @@ public interface ITileGenerator {
 	}
 }
 
-// [Serializable]
-public class GameMap : MonoBehaviour {
+public class GameMap : MonoBehaviour, ISerializable {
 	
 	// Delegates & Events
 	
@@ -300,8 +327,7 @@ public class GameMap : MonoBehaviour {
 	// TileRemovalEvent Invoked before removal actually occurs
 	public event Action<Tile> TileRemovalEvent;
 	
-	public delegate void GenerationCompleteDelegate(GameMap map);
-	public event GenerationCompleteDelegate GenerationCompleteEvent;
+	public event Action<GameMap> GenerationCompleteEvent;
 	
 	// Properties
 	public Tile RootTile {
@@ -319,7 +345,6 @@ public class GameMap : MonoBehaviour {
 	
 	
 	// Protected/Private
-	// [SerializeField]
 	protected Tile rootTile;
 	
 	private Dictionary<Vector2,List<Doorway>> leaves;
@@ -337,11 +362,8 @@ public class GameMap : MonoBehaviour {
 		
 		this.navSurface = this.gameObject.AddComponent<NavMeshSurface>();
 		this.navSurface.collectObjects = CollectObjects.Children;
-		// this.navSurface.useGeometry = NavMeshCollectGeometry.RenderMeshes;
 		this.navSurface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
-		// ^NavMeshCollectGeometry.PhysicsColliders cause some scrap from previous days to block 
-		// navigation (e.g. V-Type Engine)
-		// NavmeshCollectGeometry.RenderMeshes causes the manor start tile to be unenterable/exitable
+		// ^NavmeshCollectGeometry.RenderMeshes causes the manor start tile to be unenterable/exitable
 	}
 	
 	protected virtual void OnDestroy() {
@@ -354,16 +376,14 @@ public class GameMap : MonoBehaviour {
 		if (seed != null) this.Seed = (int)seed;
 		
 		foreach (GenerationAction action in tileGen.Generator(this)) {
-			if (action is PlacementInfo) {
-				this.TileInsertionEvent?.Invoke(this.AddTile((PlacementInfo)action));
-			} else if (action is RemovalInfo) {
-				var removal = (RemovalInfo)action;
+			if (action is PlacementInfo placement) {
+				this.TileInsertionEvent?.Invoke(this.AddTile(placement));
+			} else if (action is RemovalInfo removal) {
 				this.RemoveTile(removal);
 			} else {
 				throw new InvalidCastException($"Unknown GenerationAction: {action}");
 			}
 			yield return null;
-			// yield return Plugin.DebugWait();
 		}
 		GenerationCompleteEvent?.Invoke(this);
 	}
@@ -409,14 +429,18 @@ public class GameMap : MonoBehaviour {
 	public void RemoveLeaf(Doorway d) {
 		try {
 			this.leaves[d.Size].Remove(d);
-		} catch (KeyNotFoundException _) {}
+		} catch (KeyNotFoundException) {}
 		numLeaves--;
 	}
 	
 	public virtual Tile AddTile(PlacementInfo placement) {
-		Tile tile = placement.NewTile;
+		Tile newTile = placement.NewTile;
+		if (newTile.IsPrefab) {
+			newTile = newTile.Instantiate(this.gameObject.transform);
+		}
 		if (this.RootTile == null) {
-			this.RootTile = tile.PlaceAsRoot(this.gameObject.transform);
+			this.RootTile = newTile;
+			this.RootTile.PlaceAsRoot(this.gameObject.transform);
 			foreach (Doorway d in this.RootTile.Doorways) {
 				AddLeaf(d);
 				subscribeToDoorwayEvents(d);
@@ -427,16 +451,18 @@ public class GameMap : MonoBehaviour {
 		List<Doorway> leafset = null;
 		Doorway leaf = placement.AttachmentPoint;
 		
-		Tile newTile = null;
 		int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
-		Vector2 newTileTargetDoorwaySize = tile.Doorways[newTileTargetDoorwayIdx].Size;
+		Vector2 newTileTargetDoorwaySize = newTile.Doorways[newTileTargetDoorwayIdx].Size;
 		
 		if (!this.leaves.TryGetValue(newTileTargetDoorwaySize,out leafset)) {
 			return null;
 		}
 		
-		newTile = tile.Place(newTileTargetDoorwayIdx,leaf);
-		if (newTile == null) return null;
+		bool success = newTile.Place(newTileTargetDoorwayIdx,leaf);
+		if (!success) {
+			GameObject.Destroy(newTile.gameObject);
+			return null;
+		}
 		
 		leafset.Remove(leaf);
 		numLeaves--;
@@ -471,4 +497,121 @@ public class GameMap : MonoBehaviour {
 		this.navSurface.AddData();
 	}
 	
+	/* Format:
+	 *   Name
+	 *   RootTile
+	*/
+	public IEnumerable<SerializationToken> Serialize() {
+		yield return new SerializationToken(this.name.GetBytes(), isStartOf: this);
+		yield return new byte[1]{0};
+		foreach (var i in this.RootTile.Serialize()) {
+			yield return i;
+		}
+	}
+	
+}
+
+public class GameMapDeserializer<T,TTile> : IDeserializer<T> 
+	where T : GameMap 
+	where TTile : Tile 
+{
+	// Expects that ident has already been consumed
+	public virtual T Deserialize(ISerializable baseObj, DeserializationContext dc, object extraContext=null) {
+		var map = (T)baseObj;
+		var tileDeserializer = ((TileDeserializer<TTile>)extraContext) ?? new TileDeserializer<TTile>();
+		
+		dc.EnqueueDependency(
+			dc.Address,
+			tileDeserializer,
+			(ISerializable t) => {
+				map.AddTile(new PlacementInfo((TTile)t));
+			},
+			map
+		);
+		
+		return map;
+	}
+	
+	public virtual T Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.ConsumeUntil(
+			(byte b) => (b == 0)
+		).CastInto(out string id);
+		dc.Consume(1); // null terminator
+		
+		T rt = new GameObject(id).AddComponent<T>();
+		return Deserialize(rt, dc, extraContext);
+	}
+}
+
+public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
+	
+	protected struct Context {
+		public GameMap parentMap;
+		public int address;
+		
+		public Context(int address,GameMap parentMap=null) {
+			this.parentMap = parentMap;
+			this.address = address;
+		}
+	}
+	
+	// Expects that ident has already been consumed
+	public virtual T Deserialize(ISerializable baseObj, DeserializationContext dc, object extraContext=null) {
+		var tile = (T)baseObj;
+		var c = (Context)extraContext;
+		GameMap parentMap = c.parentMap;
+		int address = c.address;
+		
+		dc.Consume(2).CastInto(out ushort numDoors);
+		Plugin.LogFatal($"{numDoors} doors");
+		for (int didx=0; didx<numDoors; didx++) {
+			int thisDoorIndex = didx; // copy for lambda to capture
+			dc.Consume(4).CastInto(out int tileConnection);
+			dc.Consume(2).CastInto(out ushort otherDoorIndex);
+			
+			if (tileConnection != 0) {
+				Plugin.LogFatal(
+					$"Queueing connection to 0x{tileConnection:X}:{otherDoorIndex} "
+					+$"from door #{thisDoorIndex}"
+				);
+				
+				Action<ISerializable> response = ( (address < tileConnection) 
+					? (ISerializable s) => {
+						var lowertile = (T)s;
+						Plugin.LogFatal($"Placing {lowertile.name} on {tile.name}");
+						Plugin.LogFatal($"(Door #{otherDoorIndex} onto door #{thisDoorIndex})");
+						parentMap.AddTile(new PlacementInfo(
+							lowertile,
+							otherDoorIndex,
+							tile.Doorways[thisDoorIndex]
+						));
+					} : (ISerializable s) => {
+						// nop
+					}
+				);
+				
+				Plugin.LogFatal($"Queueing 0x{tileConnection:X} for {tile.name}");
+				dc.EnqueueDependency(tileConnection, this, response, extraContext);
+			}
+		}
+		return tile;
+	}
+	public virtual T Deserialize(DeserializationContext dc, object extraContext=null) {
+		int address = dc.Address;
+		GameMap parentMap = (extraContext is Context c) ? (c.parentMap) : (extraContext as GameMap);
+		
+		dc.ConsumeUntil(
+			(byte b) => b == 0
+		).CastInto(out string id);
+		dc.Consume(1); // consume null terminator
+		
+		Plugin.LogFatal($"Found Id '{id}'");
+		// The fact that I can't do T.GetPrefab is the dumbest shit. Why does C# hate static methods so much??
+		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap?.transform);
+		if (t == null) {
+			throw new NullReferenceException($"Could not find a prefab with id '{id}'");
+		}
+		return Deserialize(t, dc, new Context(address, parentMap));
+		
+	}
 }
