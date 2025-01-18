@@ -23,7 +23,7 @@ class GenerateLevel {
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			// 1577760641,
+			// 0,
 			__instance.Seed,
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
@@ -67,11 +67,11 @@ class SaveMapsPatch {
 	}
 }
 
-/* [HarmonyPatch(typeof(StartOfRound))]
+[HarmonyPatch(typeof(StartOfRound))]
 class SendMapsToClientPatch {
 	[HarmonyPatch("OnClientConnect")]
 	[HarmonyPrefix]
 	public static void SendMaps(ulong clientId) {
 		MapHandler.Instance.SendMapDataToClient(clientId);
 	}
-} */
+}

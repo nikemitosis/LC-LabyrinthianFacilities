@@ -1,8 +1,8 @@
 # DISCLAIMER
 ## EARLY DEVELOPMENT!
-### EXPECT GAME-BREAKING, SAVE-CORRUPTING BUGS
+### EXPECT GAME-BREAKING BUGS
 
-For your saves' safety, it is recommended that you only load/save saves specifically meant to be played with this mod enabled. On release, this mod will need to use save data to preserve information between save loads, so bugs are possible, especially in early development. It is also possible, if not probable, that you may encounter game-breaking bugs during development should you choose to play with this mod. In general, you play at your own risk. 
+It is possible, if not probable, that you may encounter game-breaking bugs during development should you choose to play with this mod. It is also worth noting that the format of savedata for this mod is not at all set in stone; that is to say that updates may break savedata relevant to this mod (but other savedata like furniture, scrap, quota, etc. should be safe). 
 
 ### Mod Compatibility
 It is recommended that you keep other mods to a minimum, especially those that interact with the way levels are generated. Many mods, especially simple ones like Shiploot should be fine, just know that in general mod compatibility is not yet a priority, since I'd rather get the mod working *by itself* first. 

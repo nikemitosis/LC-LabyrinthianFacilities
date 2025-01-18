@@ -115,10 +115,6 @@ public class Tile : MonoBehaviour, ISerializable {
 		newtile.bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 		
 		newtile.transform.parent = parent;
-		Plugin.LogFatal($"parent: {newtile.transform.parent}");
-		Plugin.LogFatal($"parent component: {newtile.transform.parent.GetComponent<GameMap>()}");
-		Plugin.LogFatal($"component in parent: {newtile.GetComponentInParent<GameMap>()}");
-		Plugin.LogFatal($"map: {newtile.Map}");
 		newtile.Initialize();
 		return newtile;
 	}
@@ -563,23 +559,15 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		int address = c.address;
 		
 		dc.Consume(2).CastInto(out ushort numDoors);
-		Plugin.LogFatal($"{numDoors} doors");
 		for (int didx=0; didx<numDoors; didx++) {
 			int thisDoorIndex = didx; // copy for lambda to capture
 			dc.Consume(4).CastInto(out int tileConnection);
 			dc.Consume(2).CastInto(out ushort otherDoorIndex);
 			
 			if (tileConnection != 0) {
-				Plugin.LogFatal(
-					$"Queueing connection to 0x{tileConnection:X}:{otherDoorIndex} "
-					+$"from door #{thisDoorIndex}"
-				);
-				
 				Action<ISerializable> response = ( (address < tileConnection) 
 					? (ISerializable s) => {
 						var lowertile = (T)s;
-						Plugin.LogFatal($"Placing {lowertile.name} on {tile.name}");
-						Plugin.LogFatal($"(Door #{otherDoorIndex} onto door #{thisDoorIndex})");
 						parentMap.AddTile(new PlacementInfo(
 							lowertile,
 							otherDoorIndex,
@@ -590,7 +578,6 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 					}
 				);
 				
-				Plugin.LogFatal($"Queueing 0x{tileConnection:X} for {tile.name}");
 				dc.EnqueueDependency(tileConnection, this, response, extraContext);
 			}
 		}
@@ -605,7 +592,6 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		).CastInto(out string id);
 		dc.Consume(1); // consume null terminator
 		
-		Plugin.LogFatal($"Found Id '{id}'");
 		// The fact that I can't do T.GetPrefab is the dumbest shit. Why does C# hate static methods so much??
 		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap?.transform);
 		if (t == null) {

@@ -186,15 +186,12 @@ public class DeserializationContext {
 		EnqueueDependency(1, rootDeserializer, (ISerializable x) => {}, rootContext);
 		
 		while (unresolvedReferences.Count != 0) {
-			Plugin.LogFatal($"Unresolved References: {unresolvedReferences.Count}");
 			QueuedReferenceInfo refInfo = default;
 			foreach (var entry in unresolvedReferences) {
 				this.offset = entry.Key;
 				refInfo = entry.Value;
 				break;
 			}
-			Plugin.LogFatal($"Deserializing at 0x{this.offset:X}");
-			Plugin.LogFatal($"Deserializer: {refInfo.deserializer}");
 			
 			ResolveDependency(
 				this.offset, 
@@ -225,7 +222,10 @@ public class DeserializationContext {
 		
 		if (currentDeserializer == null || currentDeserializer.GetType().IsSubclassOf(deserializer.GetType())) {
 			currentDeserializer = deserializer;
-		} else if (!deserializer.GetType().IsSubclassOf(currentDeserializer.GetType())) {
+		} else if (
+			deserializer.GetType() != currentDeserializer.GetType() 
+			&& !deserializer.GetType().IsSubclassOf(currentDeserializer.GetType())
+		) {
 			throw new ArgumentException(
 				$"Deserializers {currentDeserializer.GetType()} and {deserializer.GetType()} "
 				+$"for address {address} are not compatible. \n"

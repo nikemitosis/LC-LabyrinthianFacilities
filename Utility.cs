@@ -11,18 +11,18 @@ public static class SerializationHelper {
 	// Little Endian
 	public static byte[] GetBytes(this ushort x) {
 		return new byte[]{
-			(byte)(x << 0),
-			(byte)(x << 8)
+			(byte)(x >> 0),
+			(byte)(x >> 8)
 		};
 	}
 	
 	// Little Endian
 	public static byte[] GetBytes(this int x) {
 		return new byte[]{
-			(byte)(x << 00),
-			(byte)(x << 08),
-			(byte)(x << 16),
-			(byte)(x << 24)
+			(byte)(x >> 00),
+			(byte)(x >> 08),
+			(byte)(x >> 16),
+			(byte)(x >> 24)
 		};
 	}
 	

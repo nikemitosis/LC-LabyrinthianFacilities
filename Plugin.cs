@@ -314,6 +314,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	
 	public void SendMapDataToClient(ulong clientId) {
 		if (!(base.IsServer || base.IsHost)) return;
+		Plugin.LogInfo($"Sending map data to client #{clientId}!");
 		var cparams = new ClientRpcParams {
 			Send = new ClientRpcSendParams {
 				TargetClientIds = new ulong[]{clientId}
@@ -321,6 +322,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		};
 		var s = new Serializer();
 		s.Serialize(this);
+		Plugin.LogInfo($"({s.Output.Count} bytes)");
 		byte[] b = new byte[s.Output.Count];
 		s.Output.CopyTo(b,0);
 		LoadMapsClientRpc(b, cparams);
@@ -328,12 +330,14 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	
 	[ClientRpc]
 	protected void LoadMapsClientRpc(byte[] bytes, ClientRpcParams cparams=default) {
-		new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+		Plugin.LogInfo($"Receiving maps from server! ({bytes.Length} bytes)");
+		var rt = new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+		if (!ReferenceEquals(rt, Instance)) Plugin.LogError($"Got a different MapHandler than Instance?");
 	}
 	
 	public IEnumerable<SerializationToken> Serialize() {
 		yield return new SerializationToken(
-			((ushort)(this.maps.Count)).GetBytes(), 
+			((ushort)(this.maps.Count + this.unresolvedMaps.Count)).GetBytes(), 
 			isStartOf: this
 		);
 		foreach (var entry in this.maps) {
@@ -341,6 +345,24 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 			yield return new SerializationToken(
 				referenceTo: map
 			);
+		}
+		foreach (var entry in this.unresolvedMaps) {
+			var map = entry.Value;
+			yield return new SerializationToken(
+				referenceTo: map
+			);
+		}
+	}
+	
+	internal void DebugSave() {
+		var s = new Serializer();
+		s.Serialize(this);
+		byte[] bytes = new byte[s.Output.Count];
+		s.Output.CopyTo(bytes,0);
+		using (FileStream fs = File.Open($"{Plugin.SAVES_PATH}/debug.dat", FileMode.Create)) {
+			foreach (byte b in bytes) {
+				fs.WriteByte(b);
+			}
 		}
 	}
 }
@@ -402,6 +424,7 @@ public class MapHandlerDeserializer : IDeserializer<MapHandler> {
 		ISerializable baseObj, DeserializationContext dc, object extraContext=null
 	) {
 		if (!ReferenceEquals(baseObj, MapHandler.Instance)) {
+			Plugin.LogError($"Deserialzed instance is not MapHandler singleton!");
 			((MapHandler)baseObj).GetComponent<NetworkObject>().Despawn(true);
 		}
 		dc.Consume(2).CastInto(out ushort numMaps);
