@@ -6,12 +6,16 @@ using System.Collections.Generic;
 
 using HarmonyLib;
 
-using DunGen;
+using UnityEngine;
 
-using Tile = LabyrinthianFacilities.Tile;
+using DunGen;
 
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
+	
+	#if SETSEED
+	public int SetSeed = 0;
+	#endif
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
@@ -23,8 +27,11 @@ class GenerateLevel {
 		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 			StartOfRound.Instance.currentLevel,
 			flow,
-			// 0,
+			#if SETSEED
+			SetSeed,
+			#else
 			__instance.Seed,
+			#endif
 			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 		));
 		
@@ -44,8 +51,10 @@ class PreserveScrapPatch {
 	[HarmonyPatch("DespawnPropsAtEndOfRound")]
 	[HarmonyPrefix]
 	public static void PreserveScrap() {
-		Plugin.LogInfo("Hiding scrap!");
-		MapHandler.Instance.PreserveScrap();
+		MapHandler.Instance.PreserveMapObjects();
+		if (StartOfRound.Instance.allPlayersDead) {
+			MapHandler.Instance.DestroyAllScrap();
+		}
 	}
 }
 
@@ -73,5 +82,33 @@ class SendMapsToClientPatch {
 	[HarmonyPrefix]
 	public static void SendMaps(ulong clientId) {
 		MapHandler.Instance.SendMapDataToClient(clientId);
+	}
+}
+
+[HarmonyPatch(typeof(ES3))]
+class DeleteFilePatch {
+	[HarmonyPatch("DeleteFile", new Type[]{typeof(ES3Settings)})]
+	[HarmonyPrefix]
+	public static void DeleteSaveFile(ES3Settings settings) {
+		if (
+			settings.location == ES3.Location.File && 
+			settings.FullPath.StartsWith(Application.persistentDataPath)
+		) {
+			SaveManager.DeleteFile(
+				SaveManager.GetSaveNameFromPath(settings.FullPath)
+			);
+		}
+	}
+	
+	// LCBetterSaves Compatibility
+	[HarmonyPatch("RenameFile", new Type[]{typeof(string), typeof(string)})]
+	[HarmonyPrefix]
+	public static void RenameSaveFile(string oldFilePath,string newFilePath) {
+		if (oldFilePath.StartsWith("Temp") || newFilePath.StartsWith("Temp")) return;
+		
+		SaveManager.RenameFile(
+			SaveManager.GetSaveNameFromPath(oldFilePath),
+			SaveManager.GetSaveNameFromPath(newFilePath)
+		);
 	}
 }

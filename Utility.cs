@@ -8,6 +8,10 @@ public static class SerializationHelper {
 	// Define our own GetBytes methods to avoid problems of endianness
 	// + convenience of doing x.GetBytes() instead of BitConverter.GetBytes(x)
 	
+	public static byte[] GetBytes(this bool x) {
+		return new byte[]{(byte)(x ? 1 : 0)};
+	}
+	
 	// Little Endian
 	public static byte[] GetBytes(this ushort x) {
 		return new byte[]{
@@ -48,6 +52,9 @@ public static class SerializationHelper {
 	
 	public static void CastInto(this byte[] bytes, out string str) {
 		str = System.Text.Encoding.UTF8.GetString(bytes);
+	}
+	public static void CastInto(this byte[] bytes, out bool o) {
+		o = bytes[0] != 0;
 	}
 	public static void CastInto(this byte[] bytes, out ushort o) {
 		o = (ushort)(bytes[1] << 8 | bytes[0]);

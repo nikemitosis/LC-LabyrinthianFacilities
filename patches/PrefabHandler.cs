@@ -1,6 +1,7 @@
 namespace LabyrinthianFacilities.Patches;
 using HarmonyLib;
 
+using System;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -8,7 +9,7 @@ using UnityEngine;
 using UnityEngine.SceneManagement;
 using Unity.Netcode;
 
-
+using Object = UnityEngine.Object;
 using Tile = LabyrinthianFacilities.Tile;
 
 [HarmonyPatch(typeof(GameNetworkManager))]

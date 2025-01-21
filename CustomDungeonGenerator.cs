@@ -339,7 +339,6 @@ public class GameMap : MonoBehaviour, ISerializable {
 		}
 	}
 	
-	
 	// Protected/Private
 	protected Tile rootTile;
 	
@@ -497,7 +496,7 @@ public class GameMap : MonoBehaviour, ISerializable {
 	 *   Name
 	 *   RootTile
 	*/
-	public IEnumerable<SerializationToken> Serialize() {
+	public virtual IEnumerable<SerializationToken> Serialize() {
 		yield return new SerializationToken(this.name.GetBytes(), isStartOf: this);
 		yield return new byte[1]{0};
 		foreach (var i in this.RootTile.Serialize()) {
@@ -516,19 +515,12 @@ public class GameMapDeserializer<T,TTile> : IDeserializer<T>
 		var map = (T)baseObj;
 		var tileDeserializer = ((TileDeserializer<TTile>)extraContext) ?? new TileDeserializer<TTile>();
 		
-		dc.EnqueueDependency(
-			dc.Address,
-			tileDeserializer,
-			(ISerializable t) => {
-				map.AddTile(new PlacementInfo((TTile)t));
-			},
-			map
-		);
+		map.AddTile(new PlacementInfo((TTile)dc.ConsumeInline(tileDeserializer,map)));
 		
 		return map;
 	}
 	
-	public virtual T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public T Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.ConsumeUntil(
 			(byte b) => (b == 0)
 		).CastInto(out string id);
@@ -561,29 +553,32 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		dc.Consume(2).CastInto(out ushort numDoors);
 		for (int didx=0; didx<numDoors; didx++) {
 			int thisDoorIndex = didx; // copy for lambda to capture
-			dc.Consume(4).CastInto(out int tileConnection);
+			int tileConnection = dc.ConsumeReference(this, context: extraContext);
 			dc.Consume(2).CastInto(out ushort otherDoorIndex);
 			
-			if (tileConnection != 0) {
-				Action<ISerializable> response = ( (address < tileConnection) 
-					? (ISerializable s) => {
-						var lowertile = (T)s;
-						parentMap.AddTile(new PlacementInfo(
-							lowertile,
-							otherDoorIndex,
-							tile.Doorways[thisDoorIndex]
-						));
-					} : (ISerializable s) => {
-						// nop
-					}
+			if (tileConnection == 0) continue;
+			if (tileConnection < address) { // tileConnection is closer to root
+				// Place this tile onto other tile
+				T other = (T)dc.GetReference(tileConnection);
+				#if VERBOSE_DESERIALIZE
+				Plugin.LogDebug($"Attaching {tile.name}:{thisDoorIndex} to {other.name}:{otherDoorIndex}");
+				#endif
+				parentMap.AddTile(
+					new PlacementInfo(
+						tile, 
+						thisDoorIndex, 
+						other.Doorways[(int)otherDoorIndex]
+					)
 				);
-				
-				dc.EnqueueDependency(tileConnection, this, response, extraContext);
+			} else if (tileConnection == address) {
+				throw new Exception($"Tile connects to itself??");
+			} else { // tileConnection is farther from root
+				// noop - let other tile connect itself
 			}
 		}
 		return tile;
 	}
-	public virtual T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public T Deserialize(DeserializationContext dc, object extraContext=null) {
 		int address = dc.Address;
 		GameMap parentMap = (extraContext is Context c) ? (c.parentMap) : (extraContext as GameMap);
 		
@@ -592,7 +587,8 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		).CastInto(out string id);
 		dc.Consume(1); // consume null terminator
 		
-		// The fact that I can't do T.GetPrefab is the dumbest shit. Why does C# hate static methods so much??
+		// The fact that I can't do T.GetPrefab is the dumbest shit. 
+		// Why does C# hate static methods so much??
 		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap?.transform);
 		if (t == null) {
 			throw new NullReferenceException($"Could not find a prefab with id '{id}'");

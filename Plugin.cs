@@ -28,9 +28,7 @@ using Random = System.Random;
 public class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.1.1";
-	
-	public const string SAVES_PATH = $"BepInEx/plugins/{NAME}/saves";
+	public const string VERSION = "0.2.0";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -71,6 +69,11 @@ public class Plugin : BaseUnityPlugin {
 		
 		harmony.PatchAll();
 		
+		try {
+			SaveManager.SyncSavesByWriteTime();
+		} catch (Exception ex) {
+			Plugin.LogError($"Error syncing saves: {ex.Message}");
+		}
 		LogInfo($"Plugin {Plugin.GUID} is Awoken!");
 	}
 	
@@ -119,7 +122,7 @@ public class Plugin : BaseUnityPlugin {
 		Logger.LogFatal(message);
 	}
 	
-	public static void InitializeCustomGenerator() {
+	public static void InitializeAssets() {
 		if (initializedAssets) return;
 		initializedAssets = true;
 		
@@ -154,10 +157,13 @@ public class Plugin : BaseUnityPlugin {
 			doorway.gameObject.AddComponent<DDoorway>();
 		}
 		
-		Plugin.LogInfo("Creating Scrap");
-		foreach (GrabbableObject scrap in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
-			if (scrap.itemProperties.isScrap) {
-				scrap.gameObject.AddComponent<Scrap>();
+		Plugin.LogInfo("Creating Scrap & Equipment");
+		foreach (GrabbableObject grabbable in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
+			if (grabbable.itemProperties.isScrap) {
+				grabbable.gameObject.AddComponent<Scrap>();
+			} else if (grabbable.GetComponent<EnemyAI>() == null) {
+				// exclude maneater (and hopefully catch custom enemies with a similar gimmick)
+				grabbable.gameObject.AddComponent<Equipment>();
 			}
 		}
 	}
@@ -179,7 +185,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 			this.GetComponent<NetworkObject>().Despawn(true);
 			return;
 		}
-		Plugin.InitializeCustomGenerator();
+		Plugin.InitializeAssets();
 		Instance = this;
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
 		maps = new();
@@ -197,30 +203,23 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		Instance.OnNetworkDespawn();
 	}
 	
-	public static void TileInsertionFail(Tile t) {
-		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
-	}
-	
-	public bool TryGetUnresolvedMap(string key, out DGameMap map) {
-		if (unresolvedMaps.TryGetValue(key,out map)) {
-			unresolvedMaps.Remove(key);
-			return true;
-		}
-		return false;
-	}
-	
 	public DGameMap GetMap(
 		SelectableLevel moon, 
 		DungeonFlow flow, 
 		Action<GameMap> onComplete=null
 	) {
 		DGameMap map;
-		if (
-			!this.maps.TryGetValue((moon,flow), out map) 
-			&& !TryGetUnresolvedMap($"map:{moon.name}:{flow.name}", out map)
-		) {
-			this.maps.Add((moon,flow), map=NewMap(onComplete));
-			map.name = $"map:{moon.name}:{flow.name}";
+		if (!this.maps.TryGetValue((moon,flow), out map)) {
+			string name = $"map:{moon.name}:{flow.name}";
+			
+			if (!unresolvedMaps.TryGetValue(name, out map)) {
+				map = NewMap(onComplete);
+			} else {
+				unresolvedMaps.Remove(name);
+			}
+			
+			map.name = name;
+			this.maps.Add((moon,flow), map);
 		}
 		return map;
 	}
@@ -237,8 +236,6 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		
 		newmap = newmapobj.AddComponent<DGameMap>();
 		newmap.GenerationCompleteEvent += onComplete;
-		
-		newmap.TileInsertionEvent += MapHandler.TileInsertionFail;
 		
 		return newmap;
 	}
@@ -265,22 +262,32 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
-	public void PreserveScrap() {
-		this.activeMap?.PreserveScrap();
+	public void PreserveMapObjects() {
+		Plugin.LogInfo("Hiding Map Objects!");
+		this.activeMap?.PreserveMapObjects();
+	}
+	
+	public void DestroyAllScrap() {
+		Plugin.LogInfo("Destroying all scrap :(");
+		foreach (var entry in maps) {
+			entry.Value.DestroyAllScrap();
+		}
+		foreach (var entry in unresolvedMaps) {
+			entry.Value.DestroyAllScrap();
+		}
 	}
 	
 	public void SaveGame() {
 		if (!(base.IsServer || base.IsHost)) return;
 		Plugin.LogInfo("Saving maps!");
 		try {
-			Directory.CreateDirectory(Plugin.SAVES_PATH);
+			Directory.CreateDirectory(SaveManager.ModSaveDirectory);
 		} catch (IOException) {
 			Plugin.LogError("Could not load save; path to saves folder was interrupted by a file");
 			throw;
 		}
 		
-		string fileName = $"{Plugin.SAVES_PATH}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
-		using (FileStream fs = File.Open(fileName, FileMode.Create)) {
+		using (FileStream fs = File.Open(SaveManager.CurrentSavePath, FileMode.Create)) {
 			var s = new Serializer();
 			s.Serialize(this);
 			s.SaveToFile(fs);
@@ -288,11 +295,14 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	}
 	public void LoadGame() {
 		if (!(base.IsServer || base.IsHost)) return;
-		Plugin.LogInfo($"Loading save data!");
+		Plugin.LogInfo($"Loading save {SaveManager.CurrentSave}.dat!");
 		try {
-			string fileName = $"{Plugin.SAVES_PATH}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
+			if (SaveManager.SaveIsMissingOrNew(SaveManager.CurrentSave)) {
+				SaveManager.DeleteFile(SaveManager.CurrentSavePath);
+			}
+			
 			byte[] bytes = null;
-			using (FileStream fs = File.Open(fileName, FileMode.Open)) {
+			using (FileStream fs = File.Open(SaveManager.CurrentSavePath, FileMode.Open)) {
 				bytes = new byte[fs.Length];
 				if (fs.Read(bytes,0,(int)fs.Length) != fs.Length) {
 					Plugin.LogError($"Did not read as many bytes from file as were in the file?");
@@ -310,6 +320,18 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		m.transform.parent = this.transform;
 		m.transform.position -= Vector3.up * 200.0f;
 		this.unresolvedMaps.Add(m.name,m);
+	}
+	
+	public void InitializeLoadedMapObjects() {
+		foreach (DGameMap map in this.unresolvedMaps.Values) {
+			foreach (MapObject s in map.GetComponentsInChildren<MapObject>(includeInactive: true)) {
+				if (base.IsHost || base.IsServer) {
+					var netObj = s.GetComponent<NetworkObject>();
+					if (!netObj.IsSpawned) netObj.Spawn();
+				}
+				s.FindParent(map);
+			}
+		}
 	}
 	
 	public void SendMapDataToClient(ulong clientId) {
@@ -359,7 +381,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		s.Serialize(this);
 		byte[] bytes = new byte[s.Output.Count];
 		s.Output.CopyTo(bytes,0);
-		using (FileStream fs = File.Open($"{Plugin.SAVES_PATH}/debug.dat", FileMode.Create)) {
+		using (FileStream fs = File.Open($"{SaveManager.ModSaveDirectory}/debug.dat", FileMode.Create)) {
 			foreach (byte b in bytes) {
 				fs.WriteByte(b);
 			}
@@ -367,55 +389,115 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	}
 }
 
-// May be refactored as an extension of GrabbableObject, since we want to include equipment, too
-// (but not maneater :P)
-public class Scrap : MonoBehaviour {
+internal static class SaveManager {
 	
-	public GrabbableObject Grabbable {get {
-		return this.GetComponent<GrabbableObject>();
+	public static double SaveTimeTolerance = 20.0d;
+	public static string ModSaveDirectory;
+	public static string NativeSaveDirectory;
+	
+	public static string CurrentSave {get {return GameNetworkManager.Instance.currentSaveFileName;}}
+	public static string CurrentSavePath {get {
+		return $"{ModSaveDirectory}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
+	}}
+	public static string CurrentSavePathNative {get {
+		return $"{Application.persistentDataPath}/{GameNetworkManager.Instance.currentSaveFileName}";
 	}}
 	
-	public void FindParent() {
-		if (this.Grabbable.isInShipRoom) return;
+	static SaveManager() {
+		ModSaveDirectory = $"{Application.persistentDataPath}/{Plugin.NAME}";
+		NativeSaveDirectory = Application.persistentDataPath;
+	}
+	
+	// path does not have to be fully qualified, as long as it has the name of the save file
+	// appends .dat to the end of the filename! (because this mod uses .dat as the file extension for its save data)
+	public static string GetSaveNameFromPath(string nativePath) {
+		int fileIdx = nativePath.LastIndexOf('/') + 1; // deliberate masking of -1 error
+		string fileName = nativePath.Substring(fileIdx);
+		return $"{fileName}.dat";
+	}
+	
+	// Use to detect whether the savefile we have is actually meant for the current save
+	// (as opposed to a save where this mod wasn't active)
+	public static bool SaveIsMissingOrNew(string saveName) {
+		if (saveName.EndsWith(".dat")) saveName = saveName.Substring(0,saveName.Length-4);
+		FileInfo thisFile = new FileInfo($"{ModSaveDirectory}/{saveName}.dat");
+		FileInfo nativeFile = new FileInfo($"{NativeSaveDirectory}/{saveName}");
+		if (!nativeFile.Exists) return true;
+		return FileTimeDiff(nativeFile,thisFile) > SaveTimeTolerance;
+	}
+	
+	// positive = f1 is more recent
+	public static double FileTimeDiff(FileInfo f1, FileInfo f2) {
+		var rt = (f1.LastWriteTimeUtc - f2.LastWriteTimeUtc).TotalSeconds;
+		return rt;
+	}
+	
+	public static void RenameFile(string oldName, string newName) {
+		if (oldName.Contains("..")) throw new IOException("Miss me with that shit");
+		var file = new FileInfo($"{ModSaveDirectory}/{oldName}");
+		if (!file.Exists) return;
+		try {
+			file.MoveTo($"{ModSaveDirectory}/{newName}");
+		} catch (Exception ex) {
+			Plugin.LogError($"Error when renaming file {oldName} to {newName}: \n{ex.Message}");
+		}
+	}
+	
+	public static void DeleteFile(string saveName) {
+		if (saveName.Contains("..")) throw new IOException("Miss me with that shit");
+		var file = new FileInfo($"{ModSaveDirectory}/{saveName}");
+		if (!file.Exists) {
+			Plugin.LogInfo($"Could not delete file {saveName}; file does not exist. ");
+			return;
+		}
+		Plugin.LogInfo($"Deleting save '{saveName}'!");
+		file.Delete();
+	}
+	
+	public static void SyncSavesByWriteTime() {
+		Plugin.LogInfo($"Syncing LF save data with LC! (Compatibility with LCBetterSaves)");
 		
-		bool noparentfound = true;
-		foreach (Tile t in MapHandler.Instance.ActiveMap.GetComponentsInChildren<Tile>()) {
-			if (t.BoundingBox.Contains(this.transform.position)) {
-				this.transform.parent = t.transform;
-				noparentfound = false; break;
+		var moddir = new DirectoryInfo(ModSaveDirectory);
+		List<(int id, FileInfo file)> badSaves = new();
+		List<int> usedSaves = new();
+		foreach (FileInfo modsave in moddir.EnumerateFiles()) {
+			int id;
+			try {
+				id = int.Parse(modsave.Name.Substring(10, modsave.Name.Length-14));
+			} catch (FormatException) {
+				Plugin.LogWarning(
+					$"{typeof(SaveManager)} does not know how to sync save '{modsave.Name}'"
+				);
+				continue;
 			}
-		} if (noparentfound) {
-			this.transform.parent = MapHandler.Instance.ActiveMap.transform;
+			
+			if (SaveIsMissingOrNew(modsave.Name)) {
+				badSaves.Add((id,modsave));
+			} else {
+				usedSaves.Add(id);
+			}
 		}
-		this.Grabbable.targetFloorPosition 
-			= this.Grabbable.startFallingPosition 
-			= this.transform.localPosition;
-	}
-	
-	public void Preserve() {
-		var grabbable = this.Grabbable;
-		grabbable.isInShipRoom = StartOfRound.Instance.shipInnerRoomBounds.bounds.Contains(
-			grabbable.transform.position
-		); // fix isInShipRoom for people joining partway through a save
-		
-		this.FindParent();
-		
-		if (!grabbable.isInShipRoom) this.gameObject.SetActive(false);
-		if (grabbable.radarIcon != null && grabbable.radarIcon.gameObject != null) {
-			grabbable.radarIcon.gameObject.SetActive(false);
+		uint renamed=0;
+		foreach ((int id, FileInfo file) in badSaves) {
+			bool forelse = true;
+			for (int nativeId=1; nativeId<id; nativeId++) {
+				if (usedSaves.Contains(nativeId)) continue;
+				var natsave = new FileInfo($"{NativeSaveDirectory}/LCSaveFile{nativeId}");
+				if (Math.Abs(FileTimeDiff(natsave,file)) < SaveTimeTolerance) {
+					RenameFile($"LCSaveFile{id}.dat",$"LCSaveFile{nativeId}.dat");
+					usedSaves.Add(nativeId);
+					renamed++;
+					forelse = false; break;
+				}
+			} if (forelse) {
+				Plugin.LogError(
+					$"Unable to find matching LC save file for save '{file.Name}'. "
+					+$"Deleting file as it seems the corresponding save has been deleted. "
+				);
+				DeleteFile(file.Name);
+			}
 		}
-	}
-	
-	public void Restore() {
-		this.gameObject.SetActive(true);
-		var grabbable = this.Grabbable;
-		if (
-			!grabbable.isInShipRoom 
-			&& grabbable.radarIcon != null 
-			&& grabbable.radarIcon.gameObject != null
-		) {
-			grabbable.radarIcon.gameObject.SetActive(true);
-		}
+		if (renamed != 0) Plugin.LogInfo($"Resynced {renamed} saves!");
 	}
 }
 
@@ -432,12 +514,10 @@ public class MapHandlerDeserializer : IDeserializer<MapHandler> {
 		// Captures for lambda
 		var rt = MapHandler.Instance;
 		var mapDeserializer = new DGameMapDeserializer();
-		var tileDeserializer = new TileDeserializer<DTile>();
+		var tileDeserializer = new DTileDeserializer();
 		for (int i=0; i<numMaps; i++) {
-			dc.Consume(4).CastInto(out int refAddress);
-			dc.EnqueueDependency(
-				refAddress, 
-				mapDeserializer, 
+			dc.ConsumeReference(
+				mapDeserializer,
 				(ISerializable s) => rt.LoadMap((DGameMap)s),
 				tileDeserializer
 			);
@@ -445,9 +525,13 @@ public class MapHandlerDeserializer : IDeserializer<MapHandler> {
 		
 		return rt;
 	}
-	public virtual MapHandler Deserialize(
+	public MapHandler Deserialize(
 		DeserializationContext dc, object extraContext=null
 	) {
 		return Deserialize(MapHandler.Instance,dc,extraContext);
+	}
+	
+	public virtual void Finalize(ISerializable obj) {
+		((MapHandler)obj).InitializeLoadedMapObjects();
 	}
 }
