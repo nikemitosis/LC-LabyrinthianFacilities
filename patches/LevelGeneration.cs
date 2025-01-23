@@ -20,20 +20,24 @@ class GenerateLevel {
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
-		
-		Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
-		var flow = new DungeonFlowConverter(__instance.DungeonFlow);
-		
-		MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
-			StartOfRound.Instance.currentLevel,
-			flow,
-			#if SETSEED
-			SetSeed,
-			#else
-			__instance.Seed,
-			#endif
-			(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
-		));
+		try {
+			Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
+			var flow = new DungeonFlowConverter(__instance.DungeonFlow);
+			
+			MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
+				StartOfRound.Instance.currentLevel,
+				flow,
+				#if SETSEED
+				SetSeed,
+				#else
+				__instance.Seed,
+				#endif
+				(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
+			));
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 		
 		return false;
 	}
@@ -51,9 +55,14 @@ class PreserveScrapPatch {
 	[HarmonyPatch("DespawnPropsAtEndOfRound")]
 	[HarmonyPrefix]
 	public static void PreserveScrap() {
-		MapHandler.Instance.PreserveMapObjects();
-		if (StartOfRound.Instance.allPlayersDead) {
-			MapHandler.Instance.DestroyAllScrap();
+		try {
+			MapHandler.Instance.PreserveMapObjects();
+			if (StartOfRound.Instance.allPlayersDead) {
+				MapHandler.Instance.DestroyAllScrap();
+			}
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
 		}
 	}
 }
@@ -63,7 +72,12 @@ class FixLightningStrikingInactiveScrapPatch {
 	[HarmonyPatch("GetMetalObjectsAfterDelay")]
 	[HarmonyPrefix]
 	public static void ResetMetalScrapBuffer(ref List<GrabbableObject> ___metalObjects) {
+		try {
 		___metalObjects.Clear();
+		} catch (Exception e) {
+			Plugin.LogError("what the f________?????????????????");
+			throw e;
+		}
 	}
 }
 
@@ -72,7 +86,13 @@ class SaveMapsPatch {
 	[HarmonyPatch("SaveGame")]
 	[HarmonyPrefix]
 	public static void SaveMaps() {
-		MapHandler.Instance.SaveGame();
+		try {
+			if (!StartOfRound.Instance.inShipPhase || StartOfRound.Instance.isChallengeFile) return;
+			MapHandler.Instance.SaveGame();
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 	}
 }
 
@@ -81,7 +101,12 @@ class SendMapsToClientPatch {
 	[HarmonyPatch("OnClientConnect")]
 	[HarmonyPrefix]
 	public static void SendMaps(ulong clientId) {
-		MapHandler.Instance.SendMapDataToClient(clientId);
+		try {
+			MapHandler.Instance.SendMapDataToClient(clientId);
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 	}
 }
 
@@ -90,13 +115,18 @@ class DeleteFilePatch {
 	[HarmonyPatch("DeleteFile", new Type[]{typeof(ES3Settings)})]
 	[HarmonyPrefix]
 	public static void DeleteSaveFile(ES3Settings settings) {
-		if (
-			settings.location == ES3.Location.File && 
-			settings.FullPath.StartsWith(Application.persistentDataPath)
-		) {
-			SaveManager.DeleteFile(
-				SaveManager.GetSaveNameFromPath(settings.FullPath)
-			);
+		try {
+			if (
+				settings.location == ES3.Location.File && 
+				settings.FullPath.StartsWith(Application.persistentDataPath)
+			) {
+				SaveManager.DeleteFile(
+					SaveManager.GetSaveNameFromPath(settings.FullPath)
+				);
+			}
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
 		}
 	}
 	
@@ -104,11 +134,16 @@ class DeleteFilePatch {
 	[HarmonyPatch("RenameFile", new Type[]{typeof(string), typeof(string)})]
 	[HarmonyPrefix]
 	public static void RenameSaveFile(string oldFilePath,string newFilePath) {
-		if (oldFilePath.StartsWith("Temp") || newFilePath.StartsWith("Temp")) return;
-		
-		SaveManager.RenameFile(
-			SaveManager.GetSaveNameFromPath(oldFilePath),
-			SaveManager.GetSaveNameFromPath(newFilePath)
-		);
+		try {
+			if (oldFilePath.StartsWith("Temp") || newFilePath.StartsWith("Temp")) return;
+			
+			SaveManager.RenameFile(
+				SaveManager.GetSaveNameFromPath(oldFilePath),
+				SaveManager.GetSaveNameFromPath(newFilePath)
+			);
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 	}
 }

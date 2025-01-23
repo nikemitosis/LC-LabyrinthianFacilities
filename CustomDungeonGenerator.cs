@@ -15,7 +15,7 @@ using Unity.Netcode;
 
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
-using ISerializable = LabyrinthianFacilities.Serialization.ISerializable;
+// using ISerializable = LabyrinthianFacilities.Serialization.ISerializable;
 
 public class Doorway : MonoBehaviour {
 	// Events
@@ -511,7 +511,7 @@ public class GameMapDeserializer<T,TTile> : IDeserializer<T>
 	where TTile : Tile 
 {
 	// Expects that ident has already been consumed
-	public virtual T Deserialize(ISerializable baseObj, DeserializationContext dc, object extraContext=null) {
+	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
 		var map = (T)baseObj;
 		var tileDeserializer = ((TileDeserializer<TTile>)extraContext) ?? new TileDeserializer<TTile>();
 		
@@ -529,6 +529,10 @@ public class GameMapDeserializer<T,TTile> : IDeserializer<T>
 		T rt = new GameObject(id).AddComponent<T>();
 		return Deserialize(rt, dc, extraContext);
 	}
+
+	public virtual void Finalize(object obj) {
+		Plugin.LogFatal($"GameMap Finalize");
+	}
 }
 
 public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
@@ -544,7 +548,7 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 	}
 	
 	// Expects that ident has already been consumed
-	public virtual T Deserialize(ISerializable baseObj, DeserializationContext dc, object extraContext=null) {
+	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
 		var tile = (T)baseObj;
 		var c = (Context)extraContext;
 		GameMap parentMap = c.parentMap;
@@ -596,4 +600,7 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		return Deserialize(t, dc, new Context(address, parentMap));
 		
 	}
+
+	public virtual void Finalize(object obj) {}
 }
+

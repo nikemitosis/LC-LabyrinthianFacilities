@@ -1,11 +1,15 @@
 namespace LabyrinthianFacilities;
 
+using System;
 using System.Collections.Generic;
 
 using UnityEngine;
+using Unity.Netcode;
 
 using Serialization;
 using Util;
+
+using Object=UnityEngine.Object;
 
 public class MapObject : MonoBehaviour, ISerializable {
 	public GrabbableObject Grabbable {get {
@@ -17,9 +21,7 @@ public class MapObject : MonoBehaviour, ISerializable {
 		map ??= MapHandler.Instance.ActiveMap;
 		
 		bool noparentfound = true;
-		foreach (Tile t in map.GetComponentsInChildren<Tile>(
-			includeInactive: !map.gameObject.activeInHierarchy
-		)) {
+		foreach (Tile t in map.GetComponentsInChildren<Tile>()) {
 			if (t.BoundingBox.Contains(this.transform.position)) {
 				this.transform.parent = t.transform;
 				noparentfound = false; break;
@@ -61,7 +63,7 @@ public class MapObject : MonoBehaviour, ISerializable {
 		yield return new byte[]{(byte)0};
 		
 		yield return this.transform.position.x.GetBytes();
-		yield return (this.transform.position.y + 200f).GetBytes();
+		yield return this.transform.position.y.GetBytes();
 		yield return this.transform.position.z.GetBytes();
 	}
 }
@@ -123,35 +125,48 @@ public class Equipment : MapObject {
 public abstract class MapObjectDeserializer<T> : IDeserializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
-	public virtual T Deserialize(ISerializable baseObj, DeserializationContext dc, object extraContext=null) {
+	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
 		T rt = (T)baseObj;
 		GameMap parentMap = (GameMap)extraContext;
 		
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
-		rt.transform.localPosition = new Vector3(x,y,z);
+		if (baseObj == null) return null;
+		
+		rt.transform.position = new Vector3(x,y,z);
 		
 		rt.FindParent(parentMap);
 		return rt;
 	}
 	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+		
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string name);
 		dc.Consume(1); // null terminator
-		T rt = Object.Instantiate(GetPrefab(name));
+		T rt = null;
+		
+		// network object cannot be instantiated by client
+		if (MapHandler.Instance.IsServer || MapHandler.Instance.IsHost) {
+			rt = Object.Instantiate(GetPrefab(name));
+		}
+		
 		return Deserialize(rt, dc,extraContext);
 	}
+	
+	public virtual void Finalize(object obj) {}
 }
 
 public class ScrapDeserializer : MapObjectDeserializer<Scrap> {
 	public override Scrap GetPrefab(string id) => Scrap.GetPrefab(id);
 	
 	public override Scrap Deserialize(
-		ISerializable baseObj, DeserializationContext dc, object extraContext=null
+		object baseObj, DeserializationContext dc, object extraContext=null
 	) {
 		Scrap rt = base.Deserialize(baseObj,dc,extraContext);
 		
 		dc.Consume(4).CastInto(out int scrapValue);
+		
+		if (rt == null) return null;
 		rt.Grabbable.SetScrapValue(scrapValue);
 		
 		return rt;
@@ -161,3 +176,63 @@ public class ScrapDeserializer : MapObjectDeserializer<Scrap> {
 public class EquipmentDeserializer : MapObjectDeserializer<Equipment> {
 	public override Equipment GetPrefab(string id) => Equipment.GetPrefab(id);
 }
+
+// extraContext is GameMap that this is parented to
+public class MapObjectNetworkSerializer<T> : IDeSerializer<T> where T : MapObject {
+	public virtual IEnumerable<SerializationToken> Serialize(object o) {
+		T obj = (T)o;
+		var netObj = obj.GetComponent<NetworkObject>();
+		if (!(netObj?.IsSpawned ?? false)) {
+			throw new InvalidOperationException(
+				$"Cannot use {this.GetType()} to serialize {obj} that is not spawned. " 
+			);
+		}
+		yield return new SerializationToken(
+			netObj.NetworkObjectId.GetBytes(),
+			isStartOf: obj
+		);
+	}
+	
+	public virtual T Deserialize(
+		object baseObj, DeserializationContext dc, object extraContext=null
+	) {
+		var s = (T)baseObj;
+		s.FindParent((GameMap)extraContext);
+		
+		return s;
+	}
+	
+	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
+		return Deserialize(
+			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<T>(),
+			dc,
+			extraContext
+		);
+	}
+	
+	public virtual void Finalize(object obj) {}
+}
+
+public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
+	public override IEnumerable<SerializationToken> Serialize(object o) {
+		Scrap s = (Scrap)o;
+		foreach (var t in base.Serialize(s)) {
+			yield return t;
+		}
+		yield return s.Grabbable.scrapValue.GetBytes();
+	}
+	
+	public override Scrap Deserialize(
+		object baseObj, DeserializationContext dc, object extraContext=null
+	) {
+		Scrap s = base.Deserialize(baseObj,dc,extraContext);
+		
+		dc.Consume(sizeof(int)).CastInto(out int scrapValue);
+		s.Grabbable.SetScrapValue(scrapValue);
+		
+		return s;
+	}
+}
+
+public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> {}

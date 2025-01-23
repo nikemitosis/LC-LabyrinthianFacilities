@@ -17,23 +17,28 @@ public class PrefabInitializer {
 	[HarmonyPostfix]
 	[HarmonyPatch("Start")]
 	public static void InitMapHandlerPrefab() {
-		if (MapHandler.prefab != null) return;
-		
-		var prefab = new GameObject($"{Plugin.NAME}::MapHandler");
-		var netobj = prefab.AddComponent<NetworkObject>();
-		
-		netobj.ActiveSceneSynchronization = false;
-		netobj.AlwaysReplicateAsRoot = false;
-		netobj.AutoObjectParentSync = true;
-		netobj.DontDestroyWithOwner = false;
-		netobj.SynchronizeTransform = false;
-		netobj.DestroyWithScene = true;
-		
-		prefab.AddComponent<MapHandler>();
-		prefab.hideFlags = HideFlags.HideAndDontSave;
-		
-		NetworkManager.Singleton.AddNetworkPrefab(prefab);
-		MapHandler.prefab = prefab;
+		try {
+			if (MapHandler.prefab != null) return;
+			
+			var prefab = new GameObject($"{Plugin.NAME}::MapHandler");
+			var netobj = prefab.AddComponent<NetworkObject>();
+			
+			netobj.ActiveSceneSynchronization = false;
+			netobj.AlwaysReplicateAsRoot = false;
+			netobj.AutoObjectParentSync = true;
+			netobj.DontDestroyWithOwner = false;
+			netobj.SynchronizeTransform = false;
+			netobj.DestroyWithScene = true;
+			
+			prefab.AddComponent<MapHandler>();
+			prefab.hideFlags = HideFlags.HideAndDontSave;
+			
+			NetworkManager.Singleton.AddNetworkPrefab(prefab);
+			MapHandler.prefab = prefab;
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 	}
 }
 
@@ -42,7 +47,12 @@ public class PrefabSpawner {
 	[HarmonyPostfix]
 	[HarmonyPatch("Start")]
 	public static void SpawnMapHandler() {
-		if (MapHandler.Instance != null) return;
-		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
+		try {
+			if (MapHandler.Instance != null) return;
+			GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
+		} catch (Exception e) {
+			Plugin.LogError(e.Message);
+			throw e;
+		}
 	}
 }

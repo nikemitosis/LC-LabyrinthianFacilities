@@ -10,22 +10,31 @@ public interface ISerializable {
 	public IEnumerable<SerializationToken> Serialize();
 }
 
-public interface IDeserializer<out T> where T : ISerializable {
+public interface IDeserializer<out T> {
 	// Override this for inheritance!
-	public T Deserialize(ISerializable baseObject, DeserializationContext dc, object extraContext=null);
+	public T Deserialize(object baseObject, DeserializationContext dc, object extraContext=null);
 	
 	// Intended to instantiate some kind of prefab or default object, and initialize it with above
 	// Not intended to be used by inheritors, just for DeserializationContext
 	public T Deserialize(DeserializationContext dc, object extraContext=null);
 	
 	// Called when deserialization is completely finished
-	public virtual void Finalize(ISerializable obj) {}
+	// Mandatory implementation because if a parent doesn't implement it than a child cannot implement it
+	// yes its stupid
+	public void Finalize(object obj);
 }
+
+public interface ISerializer<out T> {
+	public IEnumerable<SerializationToken> Serialize(object tgt); //this is stupid
+}
+
+public interface IDeSerializer<T> : ISerializer<T>, IDeserializer<T> {}
 
 public struct SerializationToken {
 	public bool IsReference {get {return bytes == null;}}
 	
 	public ISerializable referenceTo;
+	public ISerializer<object> serializer;
 	public byte[] bytes;
 	
 	public ISerializable isStartOf;
@@ -39,10 +48,11 @@ public struct SerializationToken {
 	}
 	
 	public SerializationToken(
-		ISerializable referenceTo, ISerializable isStartOf=null
+		ISerializable referenceTo, ISerializer<object> serializer=null, ISerializable isStartOf=null
 	) {
 		this.bytes = null;
 		this.referenceTo = referenceTo;
+		this.serializer = serializer;
 		this.isStartOf = isStartOf;
 	}
 	
@@ -167,6 +177,151 @@ public sealed class Serializer {
 	}
 }
 
+public sealed class NewSerializer {
+	
+	private class ReferenceInfo {
+		public List<int> requests;
+		public ISerializer<object> serializer;
+		
+		public ReferenceInfo() {
+			requests = new();
+		}
+	}
+	
+	private List<byte> output;
+	private Dictionary<object, int> references;
+	private Dictionary<object, ReferenceInfo> queuedReferences;
+	
+	public IList<byte> Output {get {return output.AsReadOnly();}}
+	
+	public NewSerializer() {
+		this.output = new();
+		this.output.Add(0);
+		this.references = new();
+		this.queuedReferences = new();
+	}
+	
+	private void AddToken(SerializationToken token) {
+		if (token.isStartOf != null) {
+			BeginObject(token.isStartOf);
+		}
+		if (!token.IsReference) {
+			if (token.bytes == null) {
+				throw new ArgumentException($"Cannot add empty token");
+			} else {
+				this.output.AddRange(token.bytes);
+			}
+		} else {
+			AddReference(token.referenceTo, token.serializer);
+		}
+	}
+	
+	private readonly byte[] REFERENCE_PLACEHOLDER = [1,2,3,4];
+	private readonly byte[] NULL_BYTES = [0,0,0,0];
+	private void AddReference(object refr, ISerializer<object> serializer=null) {
+		if (refr == null) {
+			this.output.AddRange(NULL_BYTES);
+			return;
+		}
+		
+		if (references.TryGetValue(refr, out int pos)) {
+			this.output.AddRange(
+				pos.GetBytes()
+			);
+			return;
+		}
+		
+		if (!queuedReferences.TryGetValue(refr, out ReferenceInfo refInfo)) {
+			refInfo = new();
+			queuedReferences.Add(refr, refInfo);
+		}
+		
+		if (
+			refInfo.serializer == null
+			|| serializer.GetType().IsSubclassOf(refInfo.serializer.GetType())
+		) {
+			refInfo.serializer = serializer;
+		} else if (
+			!refInfo.serializer.GetType().IsSubclassOf(serializer.GetType())
+			&& refInfo.serializer.GetType() != serializer.GetType()
+		) {
+			throw new ArgumentException(
+				$"Serializers {refInfo.serializer.GetType()} and {serializer.GetType()} "
+				+$"for object {refr} are not compatible. \n"
+				+$"If this is a simple mistake, one should inherit from the other. "
+			);
+		}
+		
+		refInfo.requests.Add(this.output.Count);
+		this.output.AddRange(REFERENCE_PLACEHOLDER);
+	}
+	
+	// Call this *before* adding the object's contents to output
+	private void BeginObject(object item) {
+		references[item] = this.output.Count;
+		#if VERBOSE_SERIALIZE
+		Plugin.LogDebug($"B {item} -> 0x{this.output.Count:X} - ...");
+		#endif
+		
+		if (queuedReferences.ContainsKey(item)) {
+			foreach (int start in queuedReferences[item].requests) {
+				this.output[start+0] = (byte)(output.Count >> 00);
+				this.output[start+1] = (byte)(output.Count >> 08);
+				this.output[start+2] = (byte)(output.Count >> 16);
+				this.output[start+3] = (byte)(output.Count >> 24);
+			}
+			queuedReferences.Remove(item);
+		}
+	}
+	
+	public void Serialize(object item, ISerializer<object> serializer) {
+		serialize(item,serializer);
+		while (queuedReferences.Count != 0) {
+			object tgt = null;
+			ISerializer<object> ser = null;
+			foreach (var entry in queuedReferences) {
+				tgt = entry.Key;
+				ser = entry.Value.serializer;
+				break;
+			}
+			try {
+				serialize(tgt,ser);
+			} catch (ArgumentException e) {
+				throw e;
+			}
+		}
+	}
+	
+	private void serialize(object item,ISerializer<object> serializer) {
+		#if VERBOSE_SERIALIZE
+		int start = this.output.Count;
+		#endif
+		foreach (SerializationToken t in serializer.Serialize(item)) {
+			try {
+				this.AddToken(t);
+			} catch (ArgumentException e) {
+				throw new ArgumentException($"{item} - " + e.Message);
+			}
+		}
+		#if VERBOSE_SERIALIZE
+		Plugin.LogDebug($"S {item} -> 0x{start:X} - 0x{this.output.Count:X}");
+		#endif
+	}
+	
+	public void Clear() {
+		this.output.Clear();
+		this.output.Add(0);
+		this.references.Clear();
+		this.queuedReferences.Clear();
+	}
+	
+	public void SaveToFile(FileStream fs) {
+		foreach (byte b in Output) {
+			fs.WriteByte(b);
+		}
+	}
+}
+
 internal class ReferenceInfo {
 	public IDeserializer<ISerializable> deserializer = null;
 	public List<Action<ISerializable>> actions = new();
@@ -179,7 +334,7 @@ public sealed class DeserializationContext {
 	private byte[] data;
 	
 	private Dictionary<int, ISerializable> references;
-	private List<(ISerializable obj, Action<ISerializable> action)> finalizers;
+	private List<(ISerializable obj, Action<object> action)> finalizers;
 	private Dictionary<int, ReferenceInfo> unresolvedReferences;
 	private int address;
 	
@@ -280,12 +435,12 @@ public sealed class DeserializationContext {
 		
 		if (
 			refInfo.deserializer == null 
-			|| refInfo.deserializer.GetType().IsSubclassOf(deserializer.GetType())
+			|| deserializer.GetType().IsSubclassOf(refInfo.deserializer.GetType())
 		) {
 			refInfo.deserializer = deserializer;
 		} else if (
 			deserializer.GetType() != refInfo.deserializer.GetType() 
-			&& !deserializer.GetType().IsSubclassOf(refInfo.deserializer.GetType())
+			&& !refInfo.deserializer.GetType().IsSubclassOf(deserializer.GetType())
 		) {
 			throw new ArgumentException(
 				$"Deserializers {refInfo.deserializer.GetType()} and {deserializer.GetType()} "

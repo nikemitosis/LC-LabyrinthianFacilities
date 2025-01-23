@@ -30,11 +30,25 @@ public static class SerializationHelper {
 		};
 	}
 	
+	public static byte[] GetBytes(this ulong x) {
+		return new byte[]{
+			(byte)(x >> 00),
+			(byte)(x >> 08),
+			(byte)(x >> 16),
+			(byte)(x >> 24),
+			(byte)(x >> 32),
+			(byte)(x >> 40),
+			(byte)(x >> 48),
+			(byte)(x >> 56)
+		};
+	}
+	
 	public static byte[] GetBytes(this float x) {
 		return BitConverter.GetBytes(x);
 	}
 	
 	// UTF-8
+	// Does not null-terminate!
 	public static byte[] GetBytes(this string str) {
 		if (str == null) return new byte[0];
 		
@@ -63,8 +77,20 @@ public static class SerializationHelper {
 		o = (
 			  (int)bytes[3] << 24
 			| (int)bytes[2] << 16
-			| (int)bytes[1] << 8
-			| (int)bytes[0]
+			| (int)bytes[1] << 08
+			| (int)bytes[0] << 00
+		);
+	}
+	public static void CastInto(this byte[] bytes, out ulong o) {
+		o = (
+			  (ulong)bytes[7] << 56
+			| (ulong)bytes[6] << 48
+			| (ulong)bytes[5] << 40
+			| (ulong)bytes[4] << 32
+			| (ulong)bytes[3] << 24
+			| (ulong)bytes[2] << 16
+			| (ulong)bytes[1] << 08
+			| (ulong)bytes[0] << 00
 		);
 	}
 	public static void CastInto(this byte[] bytes, out float o) {

@@ -719,6 +719,8 @@ public class DGameMap : GameMap {
 	protected override void Awake() {
 		base.Awake();
 		
+		this.transform.position -= Vector3.up * 200f;
+		
 		this.GenerationCompleteEvent += DGameMap.GenerationCompleteHandler;
 		this.TileInsertionEvent += DGameMap.TileInsertionFail;
 		globalPropSets = new();
@@ -803,6 +805,14 @@ public class DGameMap : GameMap {
 	public void DestroyAllScrap() {
 		foreach (Scrap s in this.GetComponentsInChildren<Scrap>(includeInactive:true)) {
 			GameObject.Destroy(s.gameObject);
+		}
+	}
+	
+	public void InitializeLoadedMapObjects() {
+		foreach (MapObject s in this.GetComponentsInChildren<MapObject>(includeInactive: true)) {
+			var netObj = s.GetComponent<NetworkObject>();
+			if (!netObj.IsSpawned) netObj.Spawn();
+			s.FindParent(this);
 		}
 	}
 	
@@ -1051,7 +1061,7 @@ public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {
 	}
 	
 	public override DGameMap Deserialize(
-		ISerializable baseObj, DeserializationContext dc, object extraContext=null
+		object baseObj, DeserializationContext dc, object extraContext=null
 	) {
 		DGameMap rt = base.Deserialize(baseObj,dc,extraContext);
 		
@@ -1061,11 +1071,16 @@ public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {
 		return rt;
 	}
 	
+	public override void Finalize(object x) {
+		DGameMap map = (DGameMap)x;
+		map.InitializeLoadedMapObjects();
+		map.gameObject.SetActive(false);
+	}
 }
 
 public class DTileDeserializer : TileDeserializer<DTile> {
 	public override DTile Deserialize(
-		ISerializable baseObj, DeserializationContext dc, object extraContext=null
+		object baseObj, DeserializationContext dc, object extraContext=null
 	) {
 		var tile = (DTile)base.Deserialize(baseObj,dc,extraContext);
 		
@@ -1084,4 +1099,64 @@ public class DTileDeserializer : TileDeserializer<DTile> {
 		}
 		return tile;
 	}
+}
+
+public class DGameMapNetworkSerializer : IDeSerializer<DGameMap> {
+	private IEnumerable<SerializationToken> SerializeMapObjects<T>(DGameMap map, ISerializer<T> serializer) 
+		where T : MapObject 
+	{
+		T[] objs = map.GetComponentsInChildren<T>(includeInactive: true);
+		yield return ((ushort)objs.Length).GetBytes();
+		foreach (T o in objs) {
+			foreach (var token in serializer.Serialize(o)) {
+				yield return token;
+			}
+		}
+	}
+	
+	public IEnumerable<SerializationToken> Serialize(object o) {
+		DGameMap m = (DGameMap)o;
+		yield return new SerializationToken((m.name+"\0").GetBytes(), isStartOf: m);
+		
+		foreach (var t in SerializeMapObjects<Scrap>(m, new ScrapNetworkSerializer())) {
+			yield return t;
+		}
+		foreach (var t in SerializeMapObjects<Equipment>(m, new EquipmentNetworkSerializer())) {
+			yield return t;
+		}
+	}
+	
+	private void DeserializeMapObjects<T>(
+		DGameMap map, DeserializationContext dc, IDeserializer<T> ds
+	)
+		where T : MapObject
+	{
+		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
+		#if VERBOSE_DESERIALIZE
+			Plugin.LogDebug(
+				$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
+			);
+		#endif
+		
+		for (ushort i=0; i<count; i++) {
+			dc.ConsumeInline(ds,map);
+		}
+	}
+	
+	public DGameMap Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
+		var map = (DGameMap)baseObj;
+		DeserializeMapObjects<Scrap>(map, dc, new ScrapNetworkSerializer());
+		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer());
+		
+		return map;
+	}
+	
+	public DGameMap Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
+		dc.Consume(1);
+		DGameMap map = MapHandler.Instance.transform.Find(id).GetComponent<DGameMap>();
+		return Deserialize(map,dc,extraContext);
+	}
+
+	public virtual void Finalize(object obj) {}
 }

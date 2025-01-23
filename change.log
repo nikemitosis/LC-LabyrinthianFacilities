@@ -4,35 +4,23 @@
 {} Technical
  # Bugfix
 
+ # Fixed a bug which caused Scrap/MapObjects to not be loaded properly by client
+ 
+{}# Fixed a bug on loading saves which caused Tiles to be initialized before the map was shifted -200 units underground
+    This caused tile bounds to be centered way above the ground, effectively removing tile bounds on reload
+    i.e. newer tiles could generate on top of the old ones and scrap/equipment would not parent correctly
 
- + Added serialization support for DTile and TileProp, allowing props to be saved/loaded
- + Added serialization support for DGameMap and Scrap, allowing scrap to be saved/loaded
+{} Moved MapHandler.InitializeMapObjects to DGameMap.InitializeMapObjects
 
- + Added compatibility with LCBetterSaves
-    *Currently, the code that ensures compatibility is always enabled. It's not performance-intensive and only runs when booting up the game, so changing this is not a priority. 
+{} Implemented GetByte and CastInto for ulong
 
- + Added scrap wiping; When everyone dies in a save, all scrap is deleted on all moons
+{} Laid the groundwork to refactor serialization (not deserialization, just serialization)
+	Implemented [De]Serializers for sending data about NetworkObjects to clients when they join
+	Created a copy of Serializer and modified it to support the future version of serialization
 
- + Added equipment saving. Equipment is not wiped when everyone dies. (Knives and shotguns do not count as equipment, but shotgun shells and keys do)
+{}#Fixed a bug where DeserializationContext would use the most generic deserializer specified by any reference, rather than the most specialized. 
 
- # Fixed a bug where MapHandler.unresolvedMaps wouldn't move its maps into MapHandler.maps, but the entry in unresolvedMaps would still be deleted
-	TL;DR map load bad
+{} Added error throwing to all patches, so now the plugin reports all errors, rather than going through unity. 
+	(There are still circumstances where errors are not caught by the plugin, this is not a total solution)
 
-#+ Fixed/added save file deletion
-
- # Fixed Scrap not being spawned after being deserialized
- # Fixed a bug where Scrap would always load with the map as its parent, rather than the tile it was in
-    (Could've resulted in scrap that would be stuck behind walls if the tile was deleted)
-
- ~ Tweaked DungeonFlowConverter.tile_demand to just be the average number of main path tiles
-
-{} Reduced prop spawning iterations from 10,000 to 1000
-{} Changed DDoorway to use PropSets instead of GameObject arrays to store its blockers/doors
-{} Moved Scrap from "Plugin.cs" to a new file "MapObjects.cs"
-{} Refactored Scrap to extend a new class 'MapObject' to share behaviour with Equipment
-{} Refactored several methods involving Scrap to be about MapObjects in general
-{} Refactored Deserialization to better accomodate inlined objects and generally behave more intuitively
-
-{} Added conditional compilation for debug logging and set seed testing
-{} Changed the name of Plugin.InitializeCustomGenerator to Plugin.InitializeAssets
-{} Implemented ICollection<TileProp> for TileSet
+{} MapObjects now serialize their position rather than their localPosition
