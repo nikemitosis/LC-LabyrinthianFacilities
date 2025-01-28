@@ -19,16 +19,15 @@ using Random = System.Random;
 
 public class DDoorway : Doorway {
 	// Properties
-	public bool IsBossDoor {get {return this.randomDoorSet.Range == (1,1);}}
-	public PropSet[] PropSets {get {
-		return new PropSet[4]{alwaysBlockers,alwaysDoors,randomBlockerSet,randomDoorSet};
-	}}
+	public Prop ActiveRandomObject {get {return activeRandomObject;}}
 	
 	// Protected/Private
-	protected PropSet alwaysBlockers;
-	protected PropSet alwaysDoors;
-	protected PropSet randomBlockerSet;
-	protected PropSet randomDoorSet;
+	protected Prop[] alwaysBlockers;
+	protected Prop[] alwaysDoors;
+	protected WeightedList<Prop> randomBlockerSet;
+	protected WeightedList<Prop> randomDoorSet;
+	
+	protected Prop activeRandomObject = null;
 	
 	// Helper Methods
 	private void fixRotation() {
@@ -57,19 +56,25 @@ public class DDoorway : Doorway {
 		this.transform.rotation = Quaternion.LookRotation(closest_face.perpindicular);
 	}
 	
-	private GameObject instantiateSubPart(GameObject o) {
+	private Prop instantiateSubPart(GameObject o, bool isblocker) {
 		if (o == null) return null;
 		
-		// Do not reinstantiate subparts that already exist
-		if (o.GetComponentInParent<Tile>(includeInactive: true) == this.Tile) {
-			return o;
+		// Reinstantiate subparts that do not already exist
+		if (o.GetComponentInParent<Tile>(includeInactive: true) != this.Tile) {
+			o = GameObject.Instantiate(o);
+			o.transform.SetParent(this.transform);
+			o.transform.localPosition = Vector3.zero;
+			o.transform.localRotation = Quaternion.identity;
 		}
 		
-		var newobj = GameObject.Instantiate(o);
-		newobj.transform.SetParent(this.transform);
-		newobj.transform.localPosition = Vector3.zero;
-		newobj.transform.localRotation = Quaternion.identity;
-		return newobj;
+		var prop = o.GetComponent<Prop>() ?? o.AddComponent<Prop>();
+		if (isblocker) {
+			prop.TotalBlockers++;
+			prop.IsBlocker = true;
+		} else {
+			prop.IsConnector = true;
+		}
+		return prop;
 	}
 	
 	// Constructors/Initializers
@@ -87,13 +92,6 @@ public class DDoorway : Doorway {
 		base.Size = dg.Socket.Size;
 	}
 	
-	private void RegisterProp(GameObject b, PropSet ps, float weight=1.0f) {
-		bool isBlocker = ReferenceEquals(ps,alwaysBlockers) || ReferenceEquals(ps,randomBlockerSet);
-		
-		var prop = b.GetComponent<TileProp>() ?? b.AddComponent<TileProp>();
-		ps.Add(prop,weight);
-	}
-	
 	public override void Initialize() {
 		if (base.Initialized) return;
 		base.Initialize();
@@ -108,433 +106,172 @@ public class DDoorway : Doorway {
 		
 		var dg = this.GetComponent<DunGen.Doorway>();
 		
-		this.alwaysBlockers = new((DGameMap)this.Tile.Map, default);
+		List<Prop> objs = new();
 		for (int i=0; i<dg.BlockerSceneObjects.Count; i++) {
 			var blocker = dg.BlockerSceneObjects[i];
 			if (blocker == null) continue;
-			var b = instantiateSubPart(blocker);
-			RegisterProp(b,this.alwaysBlockers);
+			var b = instantiateSubPart(blocker,true);
+			b.Enable(true);
+			objs.Add(b);
 		}
-		this.alwaysBlockers.Range = (this.alwaysBlockers.Count,this.alwaysBlockers.Count);
+		this.alwaysBlockers = objs.ToArray();
 		
-		this.alwaysDoors = new((DGameMap)this.Tile.Map, (0,0));
+		objs.Clear();
 		for (int i=0; i<dg.ConnectorSceneObjects.Count; i++) {
 			var door = dg.ConnectorSceneObjects[i];
 			if (door == null) continue;
-			var d = instantiateSubPart(door);
-			RegisterProp(d,this.alwaysDoors);
+			var d = instantiateSubPart(door,false);
+			d.Disable();
+			objs.Add(d);
 		}
+		this.alwaysDoors = objs.ToArray();
 		
-		this.randomBlockerSet = new((DGameMap)this.Tile.Map, (1,1));
+		this.randomBlockerSet = new();
 		foreach (var entry in dg.BlockerPrefabWeights) {
 			var blocker = entry.GameObject;
 			if (blocker == null) continue;
-			var b = instantiateSubPart(blocker);
-			RegisterProp(b,this.randomBlockerSet, entry.Weight);
+			var b = instantiateSubPart(blocker,true);
+			b.Disable();
+			this.randomBlockerSet.Add(b,entry.Weight);
 		}
 		
-		this.randomDoorSet = new((DGameMap)this.Tile.Map, (0,0));
+		this.randomDoorSet = new();
 		foreach (var entry in dg.ConnectorPrefabWeights) {
 			var door = entry.GameObject;
 			if (door == null) continue;
-			var d = instantiateSubPart(door);
-			RegisterProp(d,this.randomDoorSet, entry.Weight);
+			var d = instantiateSubPart(door,false);
+			d.Disable();
+			this.randomDoorSet.Add(d,entry.Weight);
 		}
 	}
 	
 	// Overrides
 	public override void Connect(Doorway other) {
 		base.Connect(other);
-		bool choice = this.Tile.Map.rng.Next(2) == 0;
-		this.OnConnect(choice);
-		((DDoorway)other).OnConnect(!choice);
+		this.OnConnect();
+		((DDoorway)other).OnConnect();
 	}
 	
 	// Native Methods
-	// Boss Doorway in charge of random door object
-	protected virtual void OnConnect(bool isBossDoor) {
-		this.alwaysBlockers.Range = (0,0);
-		this.alwaysDoors.Range = (this.alwaysDoors.Count, this.alwaysDoors.Count);
-		
-		if (isBossDoor) this.randomDoorSet.Range = (1,1);
-		this.randomBlockerSet.Range = (0,0);
+	protected virtual void OnConnect() {
+		foreach (Prop obj in this.alwaysBlockers) {
+			obj.Disable(true);
+		}
+		foreach (Prop obj in this.alwaysDoors) {
+			obj.Enable();
+		}
+		this.activeRandomObject?.Disable(true);
+		this.activeRandomObject = null;
 	}
+	
+	public virtual void SetActiveObject(float idx) {
+		this.activeRandomObject?.Disable(true);
+		DDoorway con = (DDoorway)this.connection;
+		if (IsVacant) {
+			if (this.randomBlockerSet.Count == 0) {
+				this.activeRandomObject = null;
+			} else {
+				this.activeRandomObject = this.randomBlockerSet[this.randomBlockerSet.SummedWeight * idx];
+			}
+		} else {
+			if (this.randomDoorSet.Count == 0) {
+				this.activeRandomObject = null;
+				if (con.randomDoorSet.Count != 0) {
+					con.SetActiveObject(idx);
+				}
+				return;
+			} else {
+				this.activeRandomObject = this.randomDoorSet[this.randomDoorSet.SummedWeight * idx];
+			}
+		}
+		this.activeRandomObject?.Enable(IsVacant);
+		if (con != null) {
+			con.activeRandomObject?.Disable(true); 
+			con.activeRandomObject = this.activeRandomObject;
+		}
+	}
+	
+	public virtual IList<Prop> GetProps() {
+		List<Prop> rt = new();
+		var enumerable = this.alwaysBlockers.Concat(
+			this.alwaysDoors
+		).Concat(
+			this.randomBlockerSet
+		).Concat(
+			this.randomDoorSet
+		);
+		foreach (Prop p in enumerable) {
+			if (!rt.Contains(p)) rt.Add(p);
+		}
+		return rt;
+	}
+	
 	private static void DisconnectAction(Doorway door) {
 		var d = (DDoorway)door;
 		if (d == null) return;
-		d.alwaysBlockers.Range = (d.alwaysBlockers.Count, d.alwaysBlockers.Count);
-		d.alwaysDoors.Range = (0,0);
-		d.randomDoorSet.Range = (0,0);
-		d.randomBlockerSet.Range = (1,1);
+		foreach (Prop obj in d.alwaysBlockers) {
+			obj.Enable(true);
+		}
+		foreach (Prop obj in d.alwaysDoors) {
+			obj.Disable();
+		}
+		d.activeRandomObject?.Disable(true);
+		d.activeRandomObject = null;
 	}
 }
 
-public class TileProp : MonoBehaviour, ISerializable {
-	public event Action<TileProp> OnEnableEvent;
-	public event Action<TileProp> OnDisableEvent;
-	public event Action<TileProp> OnDestroyEvent;
+public class Prop : MonoBehaviour {
+	public bool IsBlocker  {get; set;} = false;
+	public bool IsConnector{get; set;} = false;
+	public bool IsTileProp {get; set;} = false;
+	public bool IsMapProp  {get; set;} = false;
 	
-	protected List<PropSet> propSets = new();
+	public uint BlockerCount {get; private set;} = 0;
+	public uint TotalBlockers {get; set;} = 0;
 	
-	public bool IsForcedOff {get {
-		foreach (PropSet ps in propSets) {
-			if (ps.Range.max == 0) return true;
+	
+	public bool IsDoorProp => IsBlocker || IsConnector;
+	
+	
+	public bool SetActive(bool val) => (val ? Enable() : Disable());
+	
+	public virtual bool Enable(bool asBlocker=false) {
+		// Only enable a blocker if it is being requested as a blocker by all participating doorways
+		if (IsBlocker) {
+			if (asBlocker) BlockerCount++;
+			if (BlockerCount != TotalBlockers) return false;
 		}
-		return false;
-	}}
-	public bool IsForcedOn {get {
-		foreach (PropSet ps in propSets) {
-			if (ps.Range.min == ps.Count) return true;
-		}
-		return false;
-	}}
-	public bool Ok {get {
-		foreach (var pset in propSets) {
-			if (!pset.Ok) return false;
-		}
+		this.gameObject.SetActive(true);
 		return true;
-	}}
-	public bool CanToggle {get {
-		if (this.gameObject.activeSelf) return CanDisable;
-		else return CanEnable;
-	}}
-	public bool CanEnable {get {
-		if (this.isActiveAndEnabled) return false;
-		foreach (var pset in propSets) {
-			if (pset.NumActive + 1 > pset.Range.max) return false;
-		}
-		return true;
-	}}
-	public bool CanDisable {get {
-		if (!this.isActiveAndEnabled) return false;
-		foreach (var pset in propSets) {
-			if (pset.NumActive - 1 < pset.Range.min) return false;
-		}
-		return true;
-	}}
-	
-	public Tile Tile {get {
-		return this.GetComponentInParent<Tile>();
-	}}
-	
-	public void RegisterSet(PropSet ps) {
-		this.propSets.Add(ps);
-	}
-	public void UnregisterSet(PropSet ps) {
-		this.propSets.Remove(ps);
 	}
 	
-	public IEnumerable<SerializationToken> Serialize() {
-		yield return new SerializationToken(
-			this.isActiveAndEnabled.GetBytes(),
-			isStartOf: this
-		);
+	public virtual bool Disable(bool asBlocker=false) {
+		if (asBlocker && IsBlocker) BlockerCount--;
+		this.gameObject.SetActive(false);
+		return true;
 	}
-	
-	private void OnEnable()  {this.OnEnableEvent ?.Invoke(this);}
-	private void OnDisable() {this.OnDisableEvent?.Invoke(this);}
-	private void OnDestroy() {this.OnDestroyEvent?.Invoke(this);}
 }
 
-// Do not need serialization support for propset, since the data for each propset is stored in the tile asset, 
-// and the state of its props are stored in the props themselves
-public class PropSet : ICollection<TileProp> {
-	// Protected/Private
-	protected (int min, int max) range;
-	private DGameMap map;
+public class PropSet : WeightedList<Prop> {
+	public (int min, int max) Range {get; set;} = (0,0);
+	public WeightedList<Prop> Props {get {return this;}}
 	
-	private WeightedList<TileProp> props;
-	private WeightedList<TileProp> activeProps;
-	private WeightedList<TileProp> inactiveProps;
-	
-	private void PropEnabled(TileProp p) {
-		if (inactiveProps != null && activeProps != null) {
-			float weight;
-			inactiveProps.Remove(p,out weight);
-			activeProps.Add(p,weight);
+	public PropSet() {}
+	public PropSet(DunGen.LocalPropSet pset) {
+		foreach (var entry in pset.Props.Weights) {
+			if (entry.Value == null) continue;
+			Prop p = entry.Value.GetComponent<Prop>() ?? entry.Value.AddComponent<Prop>();
+			p.IsTileProp = true;
+			this.Add(p, (entry.MainPathWeight + entry.BranchPathWeight)/2.0f);
 		}
-	}
-	private void PropDisabled(TileProp p) {
-		if (inactiveProps != null && activeProps != null) {
-			float weight;
-			activeProps.Remove(p,out weight);
-			inactiveProps.Add(p,weight);
-		}
+		this.Range = (pset.PropCount.Min,pset.PropCount.Max);
 	}
 	
-	// Properties
-	public bool High {get {return NumActive > Range.max;}}
-	public bool Low {get {return NumActive < Range.min;}}
-	public bool Ok {get {return !(High || Low);}}
-	public int NumActive {get {
-		if (activeProps == null) {
-			throw new NullReferenceException($"PropSet has not had its activity lists initialized");
-		}
-		return activeProps.Count;
-	}}
-	public (int min,int max) Range {
-		get {return range;} 
-		set {
-			(int min, int max) = value;
-			if (min < 0) throw new ArgumentOutOfRangeException($"Range min < 0 ({min} < 0)");
-			if (max < 0) throw new ArgumentOutOfRangeException($"Range max < 0 ({max} < 0)");
-			if (min > max) throw new ArgumentException($"Range min > max ({min} > {max})"); 
-			range=value;
-		}
-	}
-	public int Count {get {return props.Count;}}
-	public bool IsReadOnly {get {return false;}}
-	
-	public PropSet(DGameMap map, (int min, int max) range) {
-		this.map = map;
-		this.range = range;
-		
-		this.props = new();
-		this.activeProps = null;
-		this.inactiveProps = null;
-	}
-	
-	public void InitActivityLists() {
-		this.activeProps = new();
-		this.inactiveProps = new();
-		foreach (TileProp prop in this.props) {
-			if (prop == null) {
-				this.props.Remove(prop);
-				continue;
-			}
-			if (prop.isActiveAndEnabled) {
-				this.activeProps.Add(prop, this.props[prop]);
-			} else {
-				this.inactiveProps.Add(prop, this.props[prop]);
-			}
-		}
-	}
-	
-	public void Display() {
-		Plugin.LogDebug($"Active props: ");
-		foreach (var prop in this.activeProps) {
-			Plugin.LogDebug(
-				$"{prop} ({prop.gameObject.activeSelf}, {prop.gameObject.activeInHierarchy})"
-			);
-		}
-		Plugin.LogDebug($"Inactive props: ");
-		foreach (var prop in this.inactiveProps) {
-			Plugin.LogDebug(
-				$"{prop} ({prop.gameObject.activeSelf}, {prop.gameObject.activeInHierarchy})"
-			);
-		}
-		Plugin.LogDebug("");
-	}
-	
-	public void Add(TileProp p) {this.Add(p,1.0f);}
-	public void Add(TileProp p, float weight) {
-		this.props.Add(p,weight);
-		p.gameObject.SetActive(false);
-		p.OnDisableEvent += this.PropDisabled;
-		p.OnEnableEvent += this.PropEnabled; 
-		p.OnDestroyEvent += (TileProp p) => this.Remove(p);
-		p.RegisterSet(this);
-	}
-	public bool Remove(TileProp p) {
-		p.OnDisableEvent -= this.PropDisabled;
-		p.OnEnableEvent -= this.PropEnabled;
-		p.OnDestroyEvent -= (TileProp p) => this.Remove(p);
-		p.UnregisterSet(this);
-		if (this.activeProps   != null) this.activeProps.Remove(p);
-		if (this.inactiveProps != null) this.inactiveProps.Remove(p);
-		return this.props.Remove(p);
-	}
-	
-	public void Clear() {
-		props.Clear();
-		activeProps.Clear();
-		inactiveProps.Clear();
-	}
-	public bool Contains(TileProp p) {
-		return props.Contains(p);
-	}
-	
-	IEnumerator IEnumerable.GetEnumerator() {return this.props.GetEnumerator();}
-	public IEnumerator<TileProp> GetEnumerator() {
-		return this.props.GetEnumerator();
-	}
-	
-	public void CopyTo(TileProp[] arr,int idx) {
-		if (arr == null) throw new NullReferenceException("arr == null");
-		if (idx + this.Count > arr.Length) {
-			throw new ArgumentException("Insufficient array bounds");
-		}
-		if (idx < 0) throw new ArgumentOutOfRangeException($"idx < 0 ({idx} < 0)");
-		
-		int i=0;
-		foreach (TileProp item in this) {
-			arr[idx + i++] = item;
-		}
-		
-	}
-	
-	// returns false when randomly chosen prop cannot be enabled or no prop is found
-	// does *not* necessarily mean there are no props available to be enabled!
-	public bool EnableRandomProp() {
-		if (this.inactiveProps.Count == 0) return false;
-		
-		Random rng = this.map.rng;
-		float index = this.inactiveProps.SummedWeight * (float)rng.NextDouble();
-		
-		TileProp prop = this.inactiveProps[index];
-		if (!prop.CanEnable) return false;
-		
-		prop.gameObject.SetActive(true);
-		
-		return prop.isActiveAndEnabled;
-	}
-	public bool DisableRandomProp() {
-		if (this.activeProps.Count == 0) return false;
-		
-		Random rng = this.map.rng;
-		float index = this.activeProps.SummedWeight * (float)rng.NextDouble();
-		
-		TileProp prop = this.activeProps[index];
-		if (!prop.CanDisable) return false;
-		
-		prop.gameObject.SetActive(false);
-		
-		return !prop.isActiveAndEnabled;
-	}
-	
-	// Possible reason that lower bounds are violated: parent not enabled, so propset cannot 
-	// use SetActive to enable the prop
-	public static void Resolve(DGameMap map, IEnumerable<PropSet> psets) {
-		List<PropSet> ok = new();
-		List<PropSet> low = new();
-		List<PropSet> high = new();
-		foreach (PropSet pset in psets) {
-			pset.InitActivityLists();
-			if (pset.Low) {
-				low.Add(pset);
-			} else if (pset.High) {
-				high.Add(pset);
-			} else {
-				ok.Add(pset);
-			}
-		}
-		
-		uint iterationCount = 0;
-		Random rng = map.rng;
-		
-		// guarantee that easily-resolvable propsets are resolved
-		int idx=0;
-		while (idx < high.Count) {
-			var propset = high[idx];
-			
-			while (propset.High && propset.DisableRandomProp());
-			if (propset.Ok) {
-				high[idx] = high[high.Count-1];
-				high.RemoveAt(high.Count-1);
-				ok.Add(propset);
-			} else {
-				idx++;
-			}
-		}
-		idx=0;
-		while (idx < low.Count) {
-			var propset = low[idx];
-			
-			while (propset.Low && propset.EnableRandomProp());
-			if (propset.Ok) {
-				low[idx] = low[low.Count-1];
-				low.RemoveAt(low.Count-1);
-				ok.Add(propset);
-			} else {
-				idx++;
-			}
-		}
-		
-		// Check if any other sets have gone out of range
-		List<(PropSet pset, List<PropSet> dst)> moves = new();
-		foreach (PropSet pset in ok) {
-			if (pset.Low) {
-				moves.Add((pset,low));
-			} else if (pset.High) {
-				moves.Add((pset,high));
-			}
-		}
-		foreach (var move in moves) {
-			move.dst.Add(move.pset);
-			ok.Remove(move.pset);
-		}
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug(
-			$"{iterationCount} iterations: \n"
-			+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
-		);
-		#endif
-		
-		while (low.Count != 0 || high.Count != 0) {
-			// Resolve current issues
-			do {
-				bool chooseHigh;
-				if (low.Count == 0) {
-					chooseHigh = true;
-				} else if (high.Count == 0) {
-					chooseHigh = false;
-				} else {
-					chooseHigh = rng.Next(2) == 0;
-				}
-				
-				PropSet target;
-				if (chooseHigh) {
-					target = high[rng.Next(high.Count)];
-					while (target.High && target.DisableRandomProp());
-					if (target.Ok) {
-						high.Remove(target);
-						ok.Add(target);
-					}
-				} else {
-					target = low[rng.Next(low.Count)];
-					while (target.Low && target.EnableRandomProp());
-					if (target.Ok) {
-						low.Remove(target);
-						ok.Add(target);
-					}
-				}
-				iterationCount++;
-				#if VERBOSE_GENERATION
-				if (iterationCount % 100 == 0) {
-					Plugin.LogDebug(
-						$"{iterationCount} iterations: \n"
-						+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
-					);
-				}
-				#endif
-				if (iterationCount == 1000) {
-					Plugin.LogWarning("Aborted prop spawning after 1000 iterations");
-					Plugin.LogWarning(
-						$"(Propsets: {ok.Count} ok, {low.Count} low, {high.Count} high)"
-					);
-					return;
-				}
-			} while (low.Count != 0 || high.Count != 0);
-			
-			// Check if any other sets have gone out of range
-			moves = new();
-			foreach (PropSet pset in ok) {
-				if (pset.Low) {
-					moves.Add((pset,low));
-				} else if (pset.High) {
-					moves.Add((pset,high));
-				}
-			}
-			foreach (var move in moves) {
-				move.dst.Add(move.pset);
-				ok.Remove(move.pset);
-			}
-			#if VERBOSE_GENERATION
-			Plugin.LogDebug(
-				$"{iterationCount} iterations: \n"
-				+ $"\tok: {ok.Count}, low: {low.Count}, high: {high.Count}"
-			);
-			#endif
+	public override void Add(Prop p, float weight) {
+		if (this.Remove(p,out float oldWeight)) {
+			this.Add(p,weight + oldWeight);
+		} else {
+			base.Add(p,weight);
 		}
 	}
 }
@@ -542,12 +279,20 @@ public class PropSet : ICollection<TileProp> {
 public class DTile : Tile {
 	// Properties
 	internal PropSet[] LocalPropSets {get {return localPropSets;}}
+	internal (Prop prop, int id)[] GlobalProps {get {return globalProps;}}
 	
 	// Protected/Private
 	protected List<GrabbableObject> ownedObjects;
 	protected PropSet[] localPropSets;
+	protected (Prop prop, int id)[] globalProps;
 	
-	// Private Helper Methods
+	private void OnDestroy() {
+		if (this.Map != null) {
+			((DGameMap)this.Map).RemoveTileProps(this);
+		}
+	}
+	
+	// Helper Methods
 	private Bounds DeriveBounds() {
 		Bounds bounds;
 		var dungenTile = this.GetComponent<DunGen.Tile>();
@@ -558,8 +303,6 @@ public class DTile : Tile {
 		Plugin.LogDebug($"Tile {this.gameObject} had no predefined bounds");
 		#endif
 		
-		//subject to change, because why have consistency with what is the actual mesh of the room
-		//ajfshdlfjqew
 		bounds = new Bounds(Vector3.zero,Vector3.zero);
 		// manor tiles all use mesh
 		// factory (typically) uses variety of these 3 (belt room is weird af)
@@ -655,65 +398,47 @@ public class DTile : Tile {
 		var localPropSets = this.GetComponentsInChildren<DunGen.LocalPropSet>(includeInactive:true);
 		List<PropSet> psets = new();
 		foreach (var localPropSet in localPropSets) {
-			PropSet propset = new PropSet(
-				(DGameMap)this.Map, 
-				(localPropSet.PropCount.Min, localPropSet.PropCount.Max)
-			);
-			psets.Add(propset);
-			foreach (var entry in localPropSet.Props.Weights) {
-				GameObject propObject = entry.Value;
-				if (propObject == null) continue;
-				var prop = propObject.GetComponent<TileProp>() ?? propObject.AddComponent<TileProp>();
-				propset.Add(prop, (entry.MainPathWeight + entry.BranchPathWeight)/2.0f);
-			}
+			psets.Add(new PropSet(localPropSet));
 		}
 		this.localPropSets = psets.ToArray();
 		
 		// Global Props
-		foreach (
-			var globalProp in this.GetComponentsInChildren<DunGen.GlobalProp>(includeInactive:true)
-		) {
-			PropSet pset = ((DGameMap)this.Map).GetGlobalPropSet(globalProp.PropGroupID);
-			GameObject propObject = globalProp.gameObject;
-			var prop = propObject.GetComponent<TileProp>() ?? propObject.AddComponent<TileProp>();
-			pset.Add(prop, (globalProp.MainPathWeight + globalProp.BranchPathWeight)/2.0f);
+		var globs = this.GetComponentsInChildren<DunGen.GlobalProp>(includeInactive:true);
+		this.globalProps = new (Prop prop, int id)[globs.Length];
+		for (int i=0; i<globs.Length; i++) {
+			DunGen.GlobalProp globalProp = globs[i];
+			if (globalProp?.gameObject == null) continue;
+			
+			((DGameMap)this.Map).AddGlobalProp(globalProp);
+			this.globalProps[i] = (globalProp.GetComponent<Prop>(), globalProp.PropGroupID);
 		}
 	}
 	
-	public TileProp[] GetProps() {
-		TileProp[] allprops = this.GetComponentsInChildren<TileProp>(includeInactive: true);
-		TileProp[] filtered = new TileProp[allprops.Length];
-		int j = 0;
-		for (int i=0; i<allprops.Length; i++) {
-			TileProp p = allprops[i]; 
-			if (p.GetComponentInParent<DTile>(includeInactive: true) == this) {
-				filtered[j++] = p;
+	public IList<Prop> GetProps() {
+		List<Prop> rt = new();
+		foreach ((Prop prop, int id) in this.globalProps) {
+			if (!rt.Contains(prop)) rt.Add(prop);
+		}
+		foreach (PropSet ps in this.LocalPropSets) {
+			foreach (Prop prop in ps) {
+				if (!rt.Contains(prop)) rt.Add(prop);
 			}
 		}
-		Array.Resize(ref filtered, j);
-		return filtered;
-	}
-	
-	public override IEnumerable<SerializationToken> Serialize() {
-		foreach (var token in base.Serialize()) {
-			yield return token;
-		}
-		TileProp[] props = this.GetProps();
-		yield return ((ushort)props.Length).GetBytes();
-		#if VERBOSE_SERIALIZE
-		Plugin.LogDebug($"Found {props.Length} props");
-		#endif
-		foreach (TileProp prop in props) {
-			foreach (var token in prop.Serialize()) {
-				yield return token;
+		foreach (DDoorway d in this.Doorways) {
+			foreach (Prop prop in d.GetProps()) {
+				if (!rt.Contains(prop)) rt.Add(prop);
 			}
 		}
+		return rt;
 	}
 }
 
 public class DGameMap : GameMap {
-	protected DungeonFlow flow;
+	
 	protected Dictionary<int, PropSet> globalPropSets;
+	protected Dictionary<int, PropSet> uninitializedGlobalPropSets;
+	
+	public IReadOnlyCollection<PropSet> GlobalPropSets {get {return globalPropSets.Values;}}
 	
 	// Constructors/Initialization
 	protected override void Awake() {
@@ -724,63 +449,59 @@ public class DGameMap : GameMap {
 		this.GenerationCompleteEvent += DGameMap.GenerationCompleteHandler;
 		this.TileInsertionEvent += DGameMap.TileInsertionFail;
 		globalPropSets = new();
+		uninitializedGlobalPropSets = new();
 	}
 	
 	// Native Methods
-	private (int min,int max) GetGlobalPropRange(int id) {
-		if (this.flow == null) {
-			Plugin.LogError($"GameMap has no flow to derive GlobalProp bounds from");
-			return (1,1);
-		}
-		foreach (var settings in this.flow.GlobalProps) {
-			if (settings.ID == id) return (settings.Count.Min,settings.Count.Max);
-		}
-		Plugin.LogError($"Global Prop bounds not found for id {id}");
-		return (1,1);
-	}
-	
 	public static void TileInsertionFail(Tile t) {
 		#if VERBOSE_GENERATION
 		if (t == null) Plugin.LogDebug($"Failed to place tile {t}");
 		#endif
 	}
 	
-	protected void HandleProps() {
-		IEnumerable<PropSet> propsets = (
-			(IEnumerable<DTile>)this.GetComponentsInChildren<DTile>()
-		).SelectMany<DTile,PropSet,PropSet>(
-			(DTile t) => t.LocalPropSets,
-			(DTile t,PropSet pset) => pset
-		).Concat(
-			this.globalPropSets.Values
-		).Concat(
-			(
-				(IEnumerable<DDoorway>)this.GetComponentsInChildren<DDoorway>()
-			).SelectMany<DDoorway,PropSet,PropSet>(
-				(DDoorway d) => d.PropSets,
-				(DDoorway d,PropSet pset) => pset
-			)
-		);
-		
-		PropSet.Resolve(this, propsets);
-	}
-	
 	public PropSet GetGlobalPropSet(int id) {
 		PropSet propSet;
 		if (!globalPropSets.TryGetValue(id, out propSet)) {
-			propSet = new PropSet(this, GetGlobalPropRange(id));
-			globalPropSets.Add(id,propSet);
+			if (!uninitializedGlobalPropSets.TryGetValue(id, out propSet)) {
+				propSet = new PropSet();
+				uninitializedGlobalPropSets.Add(id,propSet);
+			}
 		}
 		return propSet;
 	}
 	
-	public override IEnumerator GenerateCoroutine(ITileGenerator tilegen, int? seed) {
+	public void AddGlobalProp(DunGen.GlobalProp globProp) {
+		Prop prop = globProp.GetComponent<Prop>() ?? globProp.gameObject.AddComponent<Prop>();
+		prop.IsMapProp = true;
+		GetGlobalPropSet(globProp.PropGroupID).Add(
+			prop, (globProp.MainPathWeight + globProp.BranchPathWeight) / 2.0f
+		);
+	}
+	
+	public void RemoveTileProps(DTile tile) {
+		foreach ((Prop prop,int id) in tile.GlobalProps) {
+			if (!globalPropSets.TryGetValue(id, out PropSet pset)) {
+				if (!uninitializedGlobalPropSets.TryGetValue(id, out pset)) {
+					throw new KeyNotFoundException($"GlobalPropId {id}");
+				}
+			}
+			pset.Remove(prop);
+		}
+	}
+	
+	public void InitializeGlobalPropSets(DungeonFlowConverter flowConverter) {
+		foreach (var entry in uninitializedGlobalPropSets) {
+			int id = entry.Key;
+			PropSet pset = entry.Value;
+			pset.Range = flowConverter.GetGlobalPropRange(id);
+			globalPropSets[id] = pset;
+		}
+		uninitializedGlobalPropSets.Clear();
+	}
+	
+	public override IEnumerator GenerateCoroutine(ITileGenerator tilegen) {
 		var dtilegen = (DungeonFlowConverter)tilegen;
-		this.flow = dtilegen.Flow;
-		var foo = (GameMap m) => HandleProps();
-		this.GenerationCompleteEvent += foo;
-		yield return StartCoroutine(base.GenerateCoroutine(tilegen,seed));
-		this.GenerationCompleteEvent -= foo;
+		yield return StartCoroutine(base.GenerateCoroutine(tilegen));
 	}
 	
 	private static void GenerationCompleteHandler(GameMap m) {
@@ -816,31 +537,33 @@ public class DGameMap : GameMap {
 		}
 	}
 	
-	public override IEnumerable<SerializationToken> Serialize() {
-		foreach (var token in base.Serialize()) {
-			yield return token;
+	protected override bool PerformAction(GenerationAction action) {
+		if (action is PropAction propA) {
+			propA.Prop.SetActive(propA.Enable);
+		} else {
+			return base.PerformAction(action);
 		}
-		
-		foreach (SerializationToken t in GetSerializedMapObjects<Scrap>()) {
-			yield return t;
-		}
-		foreach (SerializationToken t in GetSerializedMapObjects<Equipment>()) {
-			yield return t;
-		}
+		return true;
 	}
+}
+
+public class PropAction : GenerationAction {
+	protected Prop target;
+	protected bool enable;
 	
-	private IEnumerable<SerializationToken> GetSerializedMapObjects<T>() where T : MapObject {
-		T[] objs = this.GetComponentsInChildren<T>(includeInactive: true);
-		yield return ((ushort)objs.Length).GetBytes();
-		foreach (T o in objs) {
-			foreach (var token in o.Serialize()) {
-				yield return token;
-			}
-		}
+	public Prop Prop {get {return target;}}
+	public bool Enable {get {return enable;}}
+	
+	public PropAction(Prop t, bool e) {
+		target = t;
+		enable = e;
 	}
 }
 
 public class DungeonFlowConverter : ITileGenerator {
+	private int seed;
+	private Random rng;
+	
 	protected DunGen.Graph.DungeonFlow flow;
 	protected uint tile_demand;
 	
@@ -852,14 +575,23 @@ public class DungeonFlowConverter : ITileGenerator {
 	// but we're not trying to be dungen anyway, we're just trying to make dungen compatible
 	// public float BranchCountMultiplier = 0.6f;
 	
-	// max attempts to place each given tile
-	// NOT the max attempts to place any tile. 
-	//   i.e. if a tile fails to place within MAX_ATTEMPTS, a new tile is chosen
+	// if a tile fails to place within MAX_ATTEMPTS, a new tile is chosen
 	private const int MAX_ATTEMPTS=10;
 	
+	public int Seed {
+		get {
+			return this.seed;
+		} set {
+			this.rng = new Random(value);
+			this.seed = value;
+		}
+	}
+	public Random Rng {get {return rng;}}
 	public DunGen.Graph.DungeonFlow Flow {get {return flow;}}
 	
-	public DungeonFlowConverter(DungeonFlow flow) {
+	public DungeonFlowConverter(DungeonFlow flow, int seed) {
+		this.Seed = seed;
+		
 		this.flow = flow;
 		this.tile_demand = (uint)(
 			/* 0.5f *  */(
@@ -902,6 +634,14 @@ public class DungeonFlowConverter : ITileGenerator {
 		}
 	}
 	
+	public virtual (int min,int max) GetGlobalPropRange(int id) {
+		foreach (var settings in this.flow.GlobalProps) {
+			if (settings.ID == id) return (settings.Count.Min,settings.Count.Max);
+		}
+		Plugin.LogError($"Global Prop bounds not found for id {id}");
+		return (1,1);
+	}
+	
 	// Does not take into account the early termination of branches!
 	public static float AverageBranchTileCount(DungeonFlow flow) {
 		float total = 0.0f;
@@ -927,60 +667,64 @@ public class DungeonFlowConverter : ITileGenerator {
 		}
 	}
 	
-	public IEnumerable<GenerationAction> Generator(GameMap map) {
+	protected Tile GetStartTile() {
 		DunGen.Graph.GraphNode node = null;
 		foreach (var n in flow.Nodes) {
 			if (n.NodeType == DunGen.Graph.NodeType.Start) {node = n; break;}
 		}
-		Tile start = node
+		return node
 			?.TileSets[0]
 			?.TileWeights
 			?.Weights[0]
 			?.Value
 			?.GetComponent<Tile>();
-		
-		if (map.RootTile == null) {
-			if (start == null) {
-				Plugin.LogError("Start tile not found D:");
-				yield break;
-			}
-			#if VERBOSE_GENERATION
-				Plugin.LogDebug($"{this.tile_demand}: Using '{start.gameObject.name}' as start room");
-			#endif
-			
-			yield return new PlacementInfo(start);
-			this.tile_demand--;
-		} else {
-			Plugin.LogInfo($"Removing tiles...");
-			for (int i=0; i<5; i++) {
-				Tile[] tiles = map.GetComponentsInChildren<Tile>();
-				if (tiles.Length <= 1) break;
-				Tile selected;
-				do {
-					selected = tiles[map.rng.Next(tiles.Length)];
-				} while (selected == map.RootTile);
-				#if VERBOSE_GENERATION
-					Plugin.LogDebug($"Removing {selected.name}");
-				#endif
-				yield return new RemovalInfo(selected);
-			}
-			#if VERBOSE_GENERATION
-				Plugin.LogDebug($"Done removing tiles!");
-			#endif
+	}
+	
+	protected PlacementInfo PlaceRoot() {
+		Tile start = GetStartTile();
+		if (start == null) {
+			Plugin.LogError("Start tile not found D:");
+			return null;
 		}
+		#if VERBOSE_GENERATION
+			Plugin.LogDebug($"{this.tile_demand}: Using '{start.gameObject.name}' as start room");
+		#endif
 		
+		this.tile_demand--;
+		return new PlacementInfo(start);
+	}
+	protected IEnumerable<RemovalInfo> RemoveTiles(GameMap map) {
+		Plugin.LogInfo($"Removing tiles...");
+		for (int i=0; i<5; i++) {
+			Tile[] tiles = map.GetComponentsInChildren<Tile>();
+			if (tiles.Length <= 1) break;
+			Tile selected;
+			do {
+				selected = tiles[Rng.Next(tiles.Length)];
+			} while (selected == map.RootTile);
+			#if VERBOSE_GENERATION
+				Plugin.LogDebug($"Removing {selected.name}");
+			#endif
+			yield return new RemovalInfo(selected);
+		}
+		#if VERBOSE_GENERATION
+			Plugin.LogDebug($"Done removing tiles!");
+		#endif
+	}
+	protected IEnumerable<PlacementInfo> PlaceTiles(GameMap map) {
 		Plugin.LogInfo($"Placing tiles...");
 		uint iterationsSinceLastSuccess = 0;
-		PlacementInfo rt = new PlacementInfo(null);
+		PlacementInfo rt = new PlacementInfo(null,0,null);
 		while (tile_demand > 0) {
 			bool startRoomExists = map.transform.Find(
 				"ElevatorConnector(Clone)/ElevatorDoorway/StartRoom(Clone)"
 			) || map.transform.Find(
 				"Level2StartRoomConnector(Clone)/ElevatorDoorway/ManorStartRoom(Clone)"
 			);
+			Tile start = GetStartTile();
 			do {
 				int i = -1;
-				float rand_point = (float)(this.freq_range * map.rng.NextDouble());
+				float rand_point = (float)(this.freq_range * Rng.NextDouble());
 				while (rand_point > 0) {
 					i++;
 					rand_point -= this.tile_freqs[i].weight;
@@ -1006,9 +750,11 @@ public class DungeonFlowConverter : ITileGenerator {
 			#endif
 			bool forelse = true;
 			for (int i=0; i<MAX_ATTEMPTS; i++) {
-				rt.NewDoorwayIdx = map.rng.Next(rt.NewTile.Doorways.Length);
+				rt.NewDoorwayIdx = Rng.Next(rt.NewTile.Doorways.Length);
 				var d = rt.NewTile.Doorways[rt.NewDoorwayIdx];
-				rt.AttachmentPoint = map.GetLeaf(d.Size);
+				var leaves = map.GetLeaves(d.Size);
+				if (leaves == null) continue;
+				rt.AttachmentPoint = leaves[rng.Next(leaves.Count)];
 				if (rt.AttachmentPoint != null) {
 					#if VERBOSE_GENERATION
 					Plugin.LogDebug(
@@ -1041,12 +787,151 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Done Generating Tiles!");
 	}
 	
+	protected virtual IEnumerable<PropAction> HandleProps(DGameMap map) {
+		map.InitializeGlobalPropSets(this);
+		foreach (var i in HandleDoorProps(map)) yield return i;
+		foreach (var i in HandleTileProps(map)) yield return i;
+		foreach (var i in HandleMapProps (map)) yield return i;
+	}
+	
+	private IEnumerable<PropAction> HandleDoorProps(DGameMap map) {
+		#if VERBOSE_GENERATION
+		Plugin.LogDebug($"Handling random door objects...");
+		#endif
+		foreach (DDoorway door in map.GetComponentsInChildren<DDoorway>()) {
+			if (door.ActiveRandomObject != null ) continue;
+			
+			DDoorway tgt = ((door.IsVacant || Rng.Next(2) == 0) ? (door) : ((DDoorway)door.Connection));
+			tgt.SetActiveObject((float)Rng.NextDouble());
+		}
+		yield break;
+	}
+	
+	private IEnumerable<PropAction> HandleMapProps(DGameMap map) {
+		#if VERBOSE_GENERATION
+		Plugin.LogDebug($"Handling global props...");
+		#endif
+		foreach (PropSet propset in map.GlobalPropSets) {
+			#if VERBOSE_GENERATION
+			Plugin.LogDebug(
+				$"Handling propset w/ {(propset.Count > 0 ? propset[0.0f].name : "nothing in it")} "
+				+$"({propset.Count} props)"
+			);
+			#endif
+			foreach (var action in HandlePropSetPos(propset)) {
+				#if VERBOSE_GENERATION
+				Plugin.LogDebug($"+{action.Prop.name}");
+				#endif
+				yield return action;
+			}
+			foreach (var action in HandlePropSetNeg(propset,true)) {
+				#if VERBOSE_GENERATION
+				Plugin.LogDebug($"-{action.Prop.name}");
+				#endif
+				yield return action;
+			}
+		}
+	}
+	
+	private IEnumerable<PropAction> HandleTileProps(DGameMap map) {
+		#if VERBOSE_GENERATION
+		Plugin.LogDebug($"Handling local props...");
+		#endif
+		foreach (DTile tile in map.GetComponentsInChildren<DTile>()) {
+			foreach (PropSet propset in tile.LocalPropSets) {
+				foreach (var action in HandlePropSetPos(propset)) {
+					#if VERBOSE_GENERATION
+					Plugin.LogDebug($"+{action.Prop.name}");
+					#endif
+					yield return action;
+				}
+			}
+			foreach (PropSet propset in tile.LocalPropSets) {
+				foreach (var action in HandlePropSetNeg(propset)) {
+					#if VERBOSE_GENERATION
+					Plugin.LogDebug($"-{action.Prop.name}");
+					#endif
+					yield return action;
+				}
+			}
+		}
+	}
+	
+	private IEnumerable<PropAction> HandlePropSetPos(PropSet propset) {
+		WeightedList<Prop> copy = new();
+		int numActive = 0;
+		int numEnable = Rng.Next(propset.Range.min,propset.Range.max+1);
+		if (numEnable > propset.Count) numEnable = propset.Count;
+		
+		foreach ((Prop prop,float weight) in propset.Entries) {
+			if (prop.gameObject.activeSelf) numActive++;
+			else if (!prop.IsDoorProp) copy.Add(prop,weight);
+		}
+		for (int i=numActive; i<numEnable; i++) {
+			Prop tgt;
+			do {
+				if (copy.Count == 0) {tgt = null; break;}
+				tgt = copy[copy.SummedWeight*(float)Rng.NextDouble()];
+				copy.Remove(tgt);
+			} while (
+				tgt.gameObject.activeSelf 
+				|| !tgt.transform.parent.gameObject.activeInHierarchy
+			);
+			if (tgt == null) break;
+			yield return new PropAction(tgt,true);
+		}
+	}
+	
+	private IEnumerable<PropAction> HandlePropSetNeg(PropSet propset, bool globalPropSet=false) {
+		WeightedList<Prop> copy = new();
+		int numActive = 0;
+		int numEnable = propset.Range.max;
+		if (numEnable > propset.Count) numEnable = propset.Count;
+		
+		foreach ((Prop prop,float weight) in propset.Entries) {
+			if (prop.gameObject.activeInHierarchy) {
+				numActive++;
+				copy.Add(prop,weight);
+			}
+		}
+		for (int i=numActive; i>numEnable; i--) {
+			if (copy.Count == 0) break;
+			Prop tgt = copy[copy.SummedWeight*(float)Rng.NextDouble()];
+			copy.Remove(tgt);
+			yield return new PropAction(tgt,false);
+		}
+	}
+	
+	public IEnumerable<GenerationAction> Generator(GameMap m) {
+		DGameMap map = (DGameMap)m;
+		Tile start = GetStartTile();
+		
+		if (map.RootTile == null) {
+			this.tile_demand = (uint)(1.5f * tile_demand);
+			var action = PlaceRoot();
+			if (action == null) yield break;
+			yield return action;
+		} else {
+			foreach (var action in RemoveTiles(map)) {
+				yield return action;
+			}
+		}
+		
+		foreach (var action in PlaceTiles(map)) {
+			yield return action;
+		}
+		
+		foreach (var action in HandleProps(map)) {
+			yield return action;
+		}
+	}
+	
 }
 
-public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {
+public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerializer> {
 	private void DeserializeMapObjects<T,U>(DGameMap map, DeserializationContext dc)
 		where T : MapObject
-		where U : MapObjectDeserializer<T>, new()
+		where U : MapObjectSerializer<T>, new()
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
 		#if VERBOSE_DESERIALIZE
@@ -1060,13 +945,33 @@ public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {
 		}
 	}
 	
-	public override DGameMap Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
-	) {
-		DGameMap rt = base.Deserialize(baseObj,dc,extraContext);
+	private void SerializeMapObjects<T>(
+		SerializationContext sc, 
+		DGameMap map, 
+		ISerializer<T> ser
+	) where T : MapObject {
+		T[] objs = map.GetComponentsInChildren<T>(includeInactive: true);
+		sc.Add(((ushort)objs.Length).GetBytes());
+		foreach (T o in objs) {
+			sc.AddInline(o, ser);
+		}
+	}
+	
+	public override void Serialize(SerializationContext sc, object o) {
+		base.Serialize(sc,o);
+		DGameMap tgt = (DGameMap)o;
 		
-		DeserializeMapObjects<Scrap, ScrapDeserializer>(rt,dc);
-		DeserializeMapObjects<Equipment, EquipmentDeserializer>(rt,dc);
+		SerializeMapObjects<Scrap>(sc,tgt,new ScrapSerializer());
+		SerializeMapObjects<Equipment>(sc,tgt,new EquipmentSerializer());
+	}
+	
+	protected override DGameMap Deserialize(
+		DGameMap rt, DeserializationContext dc, object extraContext=null
+	) {
+		base.Deserialize(rt,dc,extraContext);
+		
+		DeserializeMapObjects<Scrap, ScrapSerializer>(rt,dc);
+		DeserializeMapObjects<Equipment, EquipmentSerializer>(rt,dc);
 		
 		return rt;
 	}
@@ -1078,11 +983,26 @@ public class DGameMapDeserializer : GameMapDeserializer<DGameMap, DTile> {
 	}
 }
 
-public class DTileDeserializer : TileDeserializer<DTile> {
-	public override DTile Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+public class DTileSerializer : TileSerializer<DTile> {
+	public override void Serialize(SerializationContext sc, object o) {
+		var tgt = (DTile)o;
+		base.Serialize(sc,tgt);
+		
+		IList<Prop> props = tgt.GetProps();
+		sc.Add((ushort)props.Count);
+		#if VERBOSE_SERIALIZE
+		Plugin.LogDebug($"Found {props.Count} props");
+		#endif
+		foreach (Prop prop in props) {
+			sc.Add(prop.gameObject.activeSelf);
+		}
+	}
+	
+	
+	protected override DTile Deserialize(
+		DTile tile, DeserializationContext dc, object extraContext=null
 	) {
-		var tile = (DTile)base.Deserialize(baseObj,dc,extraContext);
+		base.Deserialize(tile,dc,extraContext);
 		
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"Deserializing {tile.name}");
@@ -1092,42 +1012,37 @@ public class DTileDeserializer : TileDeserializer<DTile> {
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"Found {propCount} props");
 		#endif
-		TileProp[] props = tile.GetComponentsInChildren<TileProp>(includeInactive: true);
+		IList<Prop> props = tile.GetProps();
 		for (ushort i=0; i<propCount; i++) {
 			dc.Consume(1).CastInto(out bool flag);
-			props[i].gameObject.SetActive(flag);
+			props[i].SetActive(flag);
 		}
 		return tile;
 	}
 }
 
-public class DGameMapNetworkSerializer : IDeSerializer<DGameMap> {
-	private IEnumerable<SerializationToken> SerializeMapObjects<T>(DGameMap map, ISerializer<T> serializer) 
+public class DGameMapNetworkSerializer : Serializer<DGameMap> {
+	
+	private void SerializeMapObjects<T>(SerializationContext sc, DGameMap map, ISerializer<T> serializer) 
 		where T : MapObject 
 	{
 		T[] objs = map.GetComponentsInChildren<T>(includeInactive: true);
-		yield return ((ushort)objs.Length).GetBytes();
+		sc.Add((ushort)objs.Length);
 		foreach (T o in objs) {
-			foreach (var token in serializer.Serialize(o)) {
-				yield return token;
-			}
+			sc.AddInline(o,serializer);
 		}
 	}
 	
-	public IEnumerable<SerializationToken> Serialize(object o) {
+	public override void Serialize(SerializationContext sc, object o) {
 		DGameMap m = (DGameMap)o;
-		yield return new SerializationToken((m.name+"\0").GetBytes(), isStartOf: m);
+		sc.Add(m.name+"\0");
 		
-		foreach (var t in SerializeMapObjects<Scrap>(m, new ScrapNetworkSerializer())) {
-			yield return t;
-		}
-		foreach (var t in SerializeMapObjects<Equipment>(m, new EquipmentNetworkSerializer())) {
-			yield return t;
-		}
+		SerializeMapObjects<Scrap>(sc, m, new ScrapNetworkSerializer());
+		SerializeMapObjects<Equipment>(sc, m, new EquipmentNetworkSerializer());
 	}
 	
 	private void DeserializeMapObjects<T>(
-		DGameMap map, DeserializationContext dc, IDeserializer<T> ds
+		DGameMap map, DeserializationContext dc, ISerializer<T> ds
 	)
 		where T : MapObject
 	{
@@ -1143,20 +1058,17 @@ public class DGameMapNetworkSerializer : IDeSerializer<DGameMap> {
 		}
 	}
 	
-	public DGameMap Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
-		var map = (DGameMap)baseObj;
+	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc, object extraContext=null) {
 		DeserializeMapObjects<Scrap>(map, dc, new ScrapNetworkSerializer());
 		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer());
 		
 		return map;
 	}
 	
-	public DGameMap Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override DGameMap Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
 		dc.Consume(1);
 		DGameMap map = MapHandler.Instance.transform.Find(id).GetComponent<DGameMap>();
 		return Deserialize(map,dc,extraContext);
 	}
-
-	public virtual void Finalize(object obj) {}
 }

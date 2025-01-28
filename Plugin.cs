@@ -170,7 +170,7 @@ public class Plugin : BaseUnityPlugin {
 	
 }
 
-public class MapHandler : NetworkBehaviour, ISerializable {
+public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
@@ -243,7 +243,6 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	public IEnumerator Generate(
 		SelectableLevel moon, 
 		DungeonFlowConverter tilegen, 
-		int? seed=null,
 		Action<GameMap> onComplete=null
 	) {
 		if (this.activeMap != null) this.activeMap.gameObject.SetActive(false);
@@ -255,7 +254,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		map.GenerationCompleteEvent += onComplete;
 		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
 		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
-		yield return map.GenerateCoroutine(tilegen,seed);
+		yield return map.GenerateCoroutine(tilegen);
 		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
 		map.GenerationCompleteEvent -= onComplete;
 	}
@@ -288,8 +287,8 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		}
 		
 		using (FileStream fs = File.Open(SaveManager.CurrentSavePath, FileMode.Create)) {
-			var s = new Serializer();
-			s.Serialize(this);
+			var s = new SerializationContext();
+			s.Serialize(this, new MapHandlerSerializer());
 			s.SaveToFile(fs);
 		}
 	}
@@ -309,7 +308,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 					Plugin.LogError($"Did not read as many bytes from file as were in the file?");
 				}
 			}
-			new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+			new DeserializationContext(bytes).Deserialize(new MapHandlerSerializer());
 		} catch (IOException) {
 			Plugin.LogInfo($"No save data found for {GameNetworkManager.Instance.currentSaveFileName}");
 		}
@@ -330,8 +329,8 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 				TargetClientIds = new ulong[]{clientId}
 			}
 		};
-		var s = new Serializer();
-		s.Serialize(this);
+		var s = new SerializationContext();
+		s.Serialize(this, new MapHandlerSerializer());
 		Plugin.LogInfo($"({s.Output.Count} bytes)");
 		byte[] b = new byte[s.Output.Count];
 		s.Output.CopyTo(b,0);
@@ -341,7 +340,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 	[ClientRpc]
 	protected void LoadMapsClientRpc(byte[] bytes, ClientRpcParams cparams=default) {
 		Plugin.LogInfo($"Receiving maps from server! ({bytes.Length} bytes)");
-		var rt = new DeserializationContext(bytes).Deserialize(new MapHandlerDeserializer());
+		var rt = new DeserializationContext(bytes).Deserialize(new MapHandlerSerializer());
 		if (!ReferenceEquals(rt, Instance)) Plugin.LogError($"Got a different MapHandler than Instance?");
 		Plugin.LogInfo($"Requesting map objects from the server...");
 		RequestMapObjectsServerRpc();
@@ -355,7 +354,7 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 			}
 		};
 		Plugin.LogInfo($"Received request for map objects from client #{sparams.Receive.SenderClientId}");
-		var s = new NewSerializer();
+		var s = new SerializationContext();
 		s.Serialize(this,new MapHandlerNetworkSerializer());
 		Plugin.LogInfo($"{s.Output.Count} bytes of mapObjects");
 		byte[] b = new byte[s.Output.Count];
@@ -371,28 +370,9 @@ public class MapHandler : NetworkBehaviour, ISerializable {
 		Plugin.LogInfo($"Done syncing with server!");
 	}
 	
-	public IEnumerable<SerializationToken> Serialize() {
-		yield return new SerializationToken(
-			((ushort)(this.maps.Count + this.unresolvedMaps.Count)).GetBytes(), 
-			isStartOf: this
-		);
-		foreach (var entry in this.maps) {
-			var map = entry.Value;
-			yield return new SerializationToken(
-				referenceTo: map
-			);
-		}
-		foreach (var entry in this.unresolvedMaps) {
-			var map = entry.Value;
-			yield return new SerializationToken(
-				referenceTo: map
-			);
-		}
-	}
-	
 	internal void DebugSave() {
-		var s = new Serializer();
-		s.Serialize(this);
+		var s = new SerializationContext();
+		s.Serialize(this, new MapHandlerSerializer());
 		byte[] bytes = new byte[s.Output.Count];
 		s.Output.CopyTo(bytes,0);
 		using (FileStream fs = File.Open($"{SaveManager.ModSaveDirectory}/debug.dat", FileMode.Create)) {
@@ -515,9 +495,21 @@ internal static class SaveManager {
 	}
 }
 
-public class MapHandlerDeserializer : IDeserializer<MapHandler> {
-	public virtual MapHandler Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+public class MapHandlerSerializer : Serializer<MapHandler> {
+	public override void Serialize(SerializationContext sc, object o) {
+		if (!ReferenceEquals(o,MapHandler.Instance)) {
+			throw new ArgumentException($"MapHandler singleton violated");
+		}
+		var maps = MapHandler.Instance.GetComponentsInChildren<DGameMap>(true);
+		sc.Add((ushort)(maps.Length));
+		var serializer = new DGameMapSerializer();
+		foreach (DGameMap map in maps) {
+			sc.AddReference(map, serializer);
+		}
+	}
+	
+	protected override MapHandler Deserialize(
+		MapHandler baseObj, DeserializationContext dc, object extraContext=null
 	) {
 		if (!ReferenceEquals(baseObj, MapHandler.Instance)) {
 			Plugin.LogError($"Deserialzed instance is not MapHandler singleton!");
@@ -527,45 +519,40 @@ public class MapHandlerDeserializer : IDeserializer<MapHandler> {
 		
 		// Captures for lambda
 		var rt = MapHandler.Instance;
-		var mapDeserializer = new DGameMapDeserializer();
-		var tileDeserializer = new DTileDeserializer();
+		var mapDeserializer = new DGameMapSerializer();
+		var tileDeserializer = new DTileSerializer();
 		for (int i=0; i<numMaps; i++) {
 			dc.ConsumeReference(
 				mapDeserializer,
-				(ISerializable s) => rt.LoadMap((DGameMap)s),
+				(object s) => rt.LoadMap((DGameMap)s),
 				tileDeserializer
 			);
 		}
 		
 		return rt;
 	}
-	public MapHandler Deserialize(
+	public override MapHandler Deserialize(
 		DeserializationContext dc, object extraContext=null
 	) {
 		return Deserialize(MapHandler.Instance,dc,extraContext);
 	}
-	
-	public virtual void Finalize(object obj) {}
 }
 
-public class MapHandlerNetworkSerializer : IDeSerializer<MapHandler> {
-	public virtual IEnumerable<SerializationToken> Serialize(object obj) {
+public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
+	public override void Serialize(SerializationContext sc, object obj) {
 		MapHandler item = (MapHandler)obj;
 		
 		DGameMap[] maps = item.GetComponentsInChildren<DGameMap>(true);
-		yield return new SerializationToken(((ushort)maps.Length).GetBytes(),isStartOf: item);
+		sc.Add((ushort)maps.Length);
 		var mapSerializer = new DGameMapNetworkSerializer();
 		foreach (DGameMap map in maps) {
-			foreach (var t in mapSerializer.Serialize(map)) {
-				yield return t;
-			}
+			sc.AddInline(map,mapSerializer);
 		}
 	}
 	
-	public virtual MapHandler Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+	protected override MapHandler Deserialize(
+		MapHandler tgt, DeserializationContext dc, object extraContext=null
 	) {
-		MapHandler tgt = (MapHandler)baseObj;
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numMaps);
 		var ds = new DGameMapNetworkSerializer();
 		for (ushort i=0; i<numMaps; i++) {
@@ -574,9 +561,7 @@ public class MapHandlerNetworkSerializer : IDeSerializer<MapHandler> {
 		return tgt;
 	}
 	
-	public MapHandler Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override MapHandler Deserialize(DeserializationContext dc, object extraContext=null) {
 		return Deserialize(MapHandler.Instance,dc,extraContext);
 	}
-	
-	public virtual void Finalize(object obj) {}
 }

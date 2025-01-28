@@ -11,7 +11,7 @@ using Util;
 
 using Object=UnityEngine.Object;
 
-public class MapObject : MonoBehaviour, ISerializable {
+public class MapObject : MonoBehaviour {
 	public GrabbableObject Grabbable {get {
 		return this.GetComponent<GrabbableObject>();
 	}}
@@ -50,22 +50,7 @@ public class MapObject : MonoBehaviour, ISerializable {
 		var grabbable = this.Grabbable;
 	}
 	
-	/* Format:
-	 * Identifier: string
-	 * localPosition: Vector3 
-	 *   (relative position to *GameMap*, not to parent)
-	*/
-	public virtual IEnumerable<SerializationToken> Serialize() {
-		yield return new SerializationToken(
-			this.name.Substring(0,this.name.Length - "(Clone)".Length).GetBytes(),
-			isStartOf: this
-		);
-		yield return new byte[]{(byte)0};
-		
-		yield return this.transform.position.x.GetBytes();
-		yield return this.transform.position.y.GetBytes();
-		yield return this.transform.position.z.GetBytes();
-	}
+	
 }
 
 public class Scrap : MapObject {
@@ -97,17 +82,6 @@ public class Scrap : MapObject {
 			grabbable.radarIcon.gameObject.SetActive(true);
 		}
 	}
-	
-	/* Format:
-	 *     base
-	 *     ScrapValue: int
-	*/
-	public override IEnumerable<SerializationToken> Serialize() {
-		foreach (var t in base.Serialize()) {
-			yield return t;
-		}
-		yield return this.Grabbable.scrapValue.GetBytes();
-	}
 }
 
 public class Equipment : MapObject {
@@ -122,24 +96,37 @@ public class Equipment : MapObject {
 }
 
 // extraContext is GameMap that this is parented to
-public abstract class MapObjectDeserializer<T> : IDeserializer<T> where T : MapObject {
+public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
-	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
-		T rt = (T)baseObj;
+	/* Format:
+	 * Identifier: string
+	 * position: Vector3 
+	*/
+	public override void Serialize(SerializationContext sc, object t) {
+		var tgt = (MapObject)t;
+		sc.Add(tgt.name.Substring(0,tgt.name.Length - "(Clone)".Length));
+		sc.Add(new byte[]{(byte)0});
+		
+		sc.Add(tgt.transform.position.x);
+		sc.Add(tgt.transform.position.y);
+		sc.Add(tgt.transform.position.z);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc, object extraContext=null) {
 		GameMap parentMap = (GameMap)extraContext;
 		
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
-		if (baseObj == null) return null;
+		if (rt == null) return null;
 		
 		rt.transform.position = new Vector3(x,y,z);
 		
 		rt.FindParent(parentMap);
 		return rt;
 	}
-	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string name);
 		dc.Consume(1); // null terminator
@@ -150,19 +137,27 @@ public abstract class MapObjectDeserializer<T> : IDeserializer<T> where T : MapO
 			rt = Object.Instantiate(GetPrefab(name));
 		}
 		
-		return Deserialize(rt, dc,extraContext);
+		return Deserialize(rt, dc, extraContext);
 	}
-	
-	public virtual void Finalize(object obj) {}
 }
 
-public class ScrapDeserializer : MapObjectDeserializer<Scrap> {
+public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	public override Scrap GetPrefab(string id) => Scrap.GetPrefab(id);
 	
-	public override Scrap Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+	/* Format:
+	 *     base
+	 *     ScrapValue: int
+	*/
+	public override void Serialize(SerializationContext sc, object tgt) {
+		base.Serialize(sc,tgt);
+		var scrap = (Scrap)tgt;
+		sc.Add(scrap.Grabbable.scrapValue);
+	}
+	
+	protected override Scrap Deserialize(
+		Scrap rt, DeserializationContext dc, object extraContext=null
 	) {
-		Scrap rt = base.Deserialize(baseObj,dc,extraContext);
+		base.Deserialize(rt,dc,extraContext);
 		
 		dc.Consume(4).CastInto(out int scrapValue);
 		
@@ -173,13 +168,13 @@ public class ScrapDeserializer : MapObjectDeserializer<Scrap> {
 	}
 }
 
-public class EquipmentDeserializer : MapObjectDeserializer<Equipment> {
+public class EquipmentSerializer : MapObjectSerializer<Equipment> {
 	public override Equipment GetPrefab(string id) => Equipment.GetPrefab(id);
 }
 
 // extraContext is GameMap that this is parented to
-public class MapObjectNetworkSerializer<T> : IDeSerializer<T> where T : MapObject {
-	public virtual IEnumerable<SerializationToken> Serialize(object o) {
+public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
+	public override void Serialize(SerializationContext sc, object o) {
 		T obj = (T)o;
 		var netObj = obj.GetComponent<NetworkObject>();
 		if (!(netObj?.IsSpawned ?? false)) {
@@ -187,22 +182,18 @@ public class MapObjectNetworkSerializer<T> : IDeSerializer<T> where T : MapObjec
 				$"Cannot use {this.GetType()} to serialize {obj} that is not spawned. " 
 			);
 		}
-		yield return new SerializationToken(
-			netObj.NetworkObjectId.GetBytes(),
-			isStartOf: obj
-		);
+		sc.Add(netObj.NetworkObjectId);
 	}
 	
-	public virtual T Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+	protected override T Deserialize(
+		T s, DeserializationContext dc, object extraContext=null
 	) {
-		var s = (T)baseObj;
 		s.FindParent((GameMap)extraContext);
 		
 		return s;
 	}
 	
-	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
 		return Deserialize(
 			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<T>(),
@@ -210,23 +201,19 @@ public class MapObjectNetworkSerializer<T> : IDeSerializer<T> where T : MapObjec
 			extraContext
 		);
 	}
-	
-	public virtual void Finalize(object obj) {}
 }
 
 public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
-	public override IEnumerable<SerializationToken> Serialize(object o) {
+	public override void Serialize(SerializationContext sc, object o) {
+		base.Serialize(sc,o);
 		Scrap s = (Scrap)o;
-		foreach (var t in base.Serialize(s)) {
-			yield return t;
-		}
-		yield return s.Grabbable.scrapValue.GetBytes();
+		sc.Add(s.Grabbable.scrapValue);
 	}
 	
-	public override Scrap Deserialize(
-		object baseObj, DeserializationContext dc, object extraContext=null
+	protected override Scrap Deserialize(
+		Scrap s, DeserializationContext dc, object extraContext=null
 	) {
-		Scrap s = base.Deserialize(baseObj,dc,extraContext);
+		base.Deserialize(s,dc,extraContext);
 		
 		dc.Consume(sizeof(int)).CastInto(out int scrapValue);
 		s.Grabbable.SetScrapValue(scrapValue);

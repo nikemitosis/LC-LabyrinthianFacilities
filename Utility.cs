@@ -130,37 +130,55 @@ public class WeightedList<T> : IEnumerable<T> {
 	private List<float> weights;
 	private float summedWeight;
 	
+	public int Count {get {return items.Count;}}
+	public virtual IEnumerable<(T item, float weight)> Entries {get {
+		for (int i=0; i<items.Count; i++) {
+			yield return (items[i], weights[i]);
+		}
+	}}
+	
 	public WeightedList() {
 		items = new();
 		weights = new();
 		summedWeight = 0.0f;
 	}
 	
-	public int Count {get {return items.Count;}}
+	public virtual bool Validate() {
+		if (items.Count != weights.Count || items.Count != Count) {
+			return false;
+		}
+		if (items.Count != 0 && summedWeight == 0.0f) {
+			return false;
+		}
+		return true;
+	}
 	
-	public void Add(T item, float weight=1.0f) {
+	public virtual void Add(T item, float weight=1.0f) {
+		if (weight <= 0.0f) {
+			throw new ArgumentException($"Cannot use weight <= 0.0 (was given {weight})");
+		}
 		this.items.Add(item);
 		this.weights.Add(weight);
 		summedWeight += weight;
 	}
 	
-	public void Clear() {
+	public virtual void Clear() {
 		items.Clear();
 		weights.Clear();
 	}
 	
-	public bool Contains(T item) {
+	public virtual bool Contains(T item) {
 		return this.items.Contains(item);
 	}
 	
-	public void CopyTo(T[] arr, int startIdx) {
+	public virtual void CopyTo(T[] arr, int startIdx) {
 		for (int idx=startIdx; idx<Count; idx++) {
 			arr[idx] = items[idx];
 		}
 	}
 	
 	IEnumerator IEnumerable.GetEnumerator() {return GetEnumerator();}
-	public IEnumerator<T> GetEnumerator() {
+	public virtual IEnumerator<T> GetEnumerator() {
 		return new ItemEnumerator(this);
 	}
 	
@@ -168,7 +186,7 @@ public class WeightedList<T> : IEnumerable<T> {
 		float w;
 		return Remove(item,out w);
 	}
-	public bool Remove(T item, out float weight) {
+	public virtual bool Remove(T item, out float weight) {
 		try {
 			int idx = items.IndexOf(item);
 			items.RemoveAt(idx);
@@ -182,16 +200,17 @@ public class WeightedList<T> : IEnumerable<T> {
 		}
 	}
 	
-	public T this[float index] { get {
-		if (index < 0.0f || index > summedWeight) {
+	public virtual T this[float index] { get {
+		if (index < 0.0f || index > summedWeight || summedWeight == 0) {
 			throw new ArgumentOutOfRangeException(
 				$"Index out of range ({index}, list size is {this.summedWeight})"
 			);
 		}
+		if (index == summedWeight) return items[^1];
 		
 		for (int idx=0; idx<Count; idx++) {
 			index -= weights[idx];
-			if (index <= 0) return items[idx];
+			if (index < 0) return items[idx];
 		}
 		
 		throw new ArgumentOutOfRangeException(
@@ -199,7 +218,11 @@ public class WeightedList<T> : IEnumerable<T> {
 		);
 	}}
 	
-	public float this[T item] {get {
-		return weights[items.IndexOf(item)];
+	public virtual float this[T item] {get {
+		int idx = items.IndexOf(item);
+		if (idx == -1) {
+			throw new ArgumentOutOfRangeException($"Item {item} not in list");
+		}
+		return weights[idx];
 	}}
 }

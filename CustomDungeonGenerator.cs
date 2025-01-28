@@ -15,7 +15,6 @@ using Unity.Netcode;
 
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
-// using ISerializable = LabyrinthianFacilities.Serialization.ISerializable;
 
 public class Doorway : MonoBehaviour {
 	// Events
@@ -78,7 +77,7 @@ public class Doorway : MonoBehaviour {
 	}
 }
 
-public class Tile : MonoBehaviour, ISerializable {
+public class Tile : MonoBehaviour {
 	// Properties
 	public bool Initialized {
 		get { return initialized; }
@@ -231,39 +230,6 @@ public class Tile : MonoBehaviour, ISerializable {
 		}
 		return null;
 	}
-	
-	/* Format:
-	 *  string prefabIdentifier
-	 *      Defaulting to prefab name, cuz I don't know a more reliably unique identifier
-	 *      that's also consistent with different tiles being added/removed
-	 *  (Tile*, int)[] doorways
-	 *		{Tile*	connection
-	 *		int		doorwayIndex}
-	*/
-	public virtual IEnumerable<SerializationToken> Serialize() {
-		
-		// prefabIdentifier
-		yield return new SerializationToken(
-			this.GetSerializationId(),
-			isStartOf: this
-		);
-		
-		// ushort doorways.length
-		yield return ((ushort)this.Doorways.Length).GetBytes();
-		foreach (Doorway d in this.Doorways) {
-			// Tile* connection
-			yield return new SerializationToken(referenceTo: d.Connection?.Tile);
-			
-			// int doorwayIndex
-			if (d.Connection == null) {
-				yield return ((ushort)0).GetBytes();
-			} else {
-				yield return ((ushort)Array.IndexOf(
-					d.Connection.Tile.Doorways, d.Connection
-				)).GetBytes();
-			}
-		}
-	}
 }
 
 public abstract class GenerationAction {}
@@ -306,6 +272,17 @@ public class RemovalInfo : GenerationAction {
 	}
 }
 
+public class ConnectAction : GenerationAction {
+	private Doorway d1, d2;
+	public (Doorway d1, Doorway d2) Doorways {get {return (d1,d2);}}
+	
+	public ConnectAction(Doorway d1, Doorway d2) {
+		this.d1 = d1;
+		this.d2 = d2;
+		if (!d1.Fits(d2)) throw new ArgumentException($"Doors {d1} and {d2} do not fit together");
+	}
+}
+
 public interface ITileGenerator {
 	public IEnumerable<GenerationAction> Generator(GameMap map);
 	
@@ -314,7 +291,7 @@ public interface ITileGenerator {
 	}
 }
 
-public class GameMap : MonoBehaviour, ISerializable {
+public class GameMap : MonoBehaviour {
 	
 	// Delegates & Events
 	
@@ -330,30 +307,20 @@ public class GameMap : MonoBehaviour, ISerializable {
 		get {return rootTile;} 
 		protected set {rootTile=value;}
 	}
-	public int Seed {
-		get {
-			return this._seed;
-		} set {
-			this.rng = new Random(value);
-			this._seed = value;
-		}
-	}
 	
 	// Protected/Private
 	protected Tile rootTile;
 	
 	private Dictionary<Vector2,List<Doorway>> leaves;
+	private Dictionary<Vector3,List<Doorway>> leavesByPos;
 	private int numLeaves = 0;
 	protected NavMeshSurface navSurface;
-	
-	private int _seed;
-	public Random rng {get; private set; }
 	
 	// MonoBehaviour Stuff
 	protected virtual void Awake() {
 		this.rootTile = null;
 		this.leaves = new Dictionary<Vector2,List<Doorway>>();
-		this.rng = new Random(Environment.TickCount);
+		this.leavesByPos = new();
 		
 		this.navSurface = this.gameObject.AddComponent<NavMeshSurface>();
 		this.navSurface.collectObjects = CollectObjects.Children;
@@ -365,59 +332,51 @@ public class GameMap : MonoBehaviour, ISerializable {
 		this.navSurface.RemoveData();
 	}
 	
+	protected virtual bool PerformAction(GenerationAction action) {
+		if (action is PlacementInfo placement) {
+			this.TileInsertionEvent?.Invoke(this.AddTile(placement));
+		} else if (action is RemovalInfo removal) {
+			this.RemoveTile(removal);
+		} else if (action is ConnectAction connection)  {
+			connection.Doorways.d1.Connect(connection.Doorways.d2);
+		} else {
+			return false;
+		}
+		return true;
+	}
+	
 	// Native Methods
-	public virtual IEnumerator GenerateCoroutine(ITileGenerator tileGen, int? seed=null) {
-		
-		if (seed != null) this.Seed = (int)seed;
-		
+	public virtual IEnumerator GenerateCoroutine(ITileGenerator tileGen) {
 		foreach (GenerationAction action in tileGen.Generator(this)) {
-			if (action is PlacementInfo placement) {
-				this.TileInsertionEvent?.Invoke(this.AddTile(placement));
-			} else if (action is RemovalInfo removal) {
-				this.RemoveTile(removal);
-			} else {
-				throw new InvalidCastException($"Unknown GenerationAction: {action}");
+			if (!this.PerformAction(action)) {
+				throw new InvalidOperationException($"Unknown GenerationAction: {action}");
 			}
 			yield return null;
 		}
 		GenerationCompleteEvent?.Invoke(this);
 	}
 	
-	public Doorway GetLeaf(Vector2? size=null, int? idxn=null) {
-		if (numLeaves == 0) return null;
-		if (idxn != null && (int)idxn >= numLeaves) {
-			throw new ArgumentOutOfRangeException("idx >= number of leaves");
-		}
-		
-		if (size == null) {
-			int idx = idxn ?? this.rng.Next(numLeaves);
-			
-			// order not guaranteed...
-			foreach (var kvpair in this.leaves) {
-				if (idx < kvpair.Value.Count) return kvpair.Value[idx];
-				idx -= kvpair.Value.Count;
-			}
-			throw new SystemException("numLeaves is incorrect!");
-		} else {
-			List<Doorway> ds;
-			if (!this.leaves.TryGetValue((Vector2)size,out ds)) return null;
-			
-			int idx = idxn ?? this.rng.Next(ds.Count);
-			return idx < ds.Count ? ds[idx] : null;
-		}
+	public IList<Doorway> GetLeaves(Vector2 size) {
+		if (!this.leaves.TryGetValue(size, out List<Doorway> ds)) return null;
+		return ds.Count == 0 ? null : ds.AsReadOnly();
 	}
 	
 	public void AddLeaf(Doorway d) {
 		if (d == null) return;
 		
-		List<Doorway> leaf;
-		if (this.leaves.TryGetValue(d.Size, out leaf)) {
-			leaf.Add(d);
-		} else {
-			leaf = new List<Doorway>();
-			leaf.Add(d);
-			this.leaves.Add(d.Size,leaf);
+		List<Doorway> leaves;
+		if (!this.leaves.TryGetValue(d.Size, out leaves)) {
+			leaves = new List<Doorway>();
+			this.leaves.Add(d.Size,leaves);
 		}
+		leaves.Add(d);
+		
+		if (!this.leavesByPos.TryGetValue(d.transform.position, out leaves)) {
+			leaves = new();
+			this.leavesByPos.Add(d.transform.position,leaves);
+		}
+		leaves.Add(d);
+		
 		numLeaves++;
 	}
 	
@@ -492,35 +451,35 @@ public class GameMap : MonoBehaviour, ISerializable {
 		this.navSurface.AddData();
 	}
 	
+}
+
+public class GameMapSerializer<T,TTile,TTileSer> : Serializer<T> 
+	where T : GameMap 
+	where TTile : Tile 
+	where TTileSer : ISerializer<TTile>, new()
+{
 	/* Format:
 	 *   Name
 	 *   RootTile
 	*/
-	public virtual IEnumerable<SerializationToken> Serialize() {
-		yield return new SerializationToken(this.name.GetBytes(), isStartOf: this);
-		yield return new byte[1]{0};
-		foreach (var i in this.RootTile.Serialize()) {
-			yield return i;
-		}
+	public override void Serialize(SerializationContext sc, object o) {
+		var map = (T)o;
+		sc.Add(map.name.GetBytes());
+		sc.Add(new byte[1]{0});
+		
+		sc.AddInline(map.RootTile, new TTileSer());
 	}
 	
-}
-
-public class GameMapDeserializer<T,TTile> : IDeserializer<T> 
-	where T : GameMap 
-	where TTile : Tile 
-{
 	// Expects that ident has already been consumed
-	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
-		var map = (T)baseObj;
-		var tileDeserializer = ((TileDeserializer<TTile>)extraContext) ?? new TileDeserializer<TTile>();
+	protected override T Deserialize(T map, DeserializationContext dc, object extraContext=null) {
+		var tileDeserializer = ((TileSerializer<TTile>)extraContext) ?? new TileSerializer<TTile>();
 		
 		map.AddTile(new PlacementInfo((TTile)dc.ConsumeInline(tileDeserializer,map)));
 		
 		return map;
 	}
 	
-	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.ConsumeUntil(
 			(byte b) => (b == 0)
 		).CastInto(out string id);
@@ -529,13 +488,40 @@ public class GameMapDeserializer<T,TTile> : IDeserializer<T>
 		T rt = new GameObject(id).AddComponent<T>();
 		return Deserialize(rt, dc, extraContext);
 	}
-
-	public virtual void Finalize(object obj) {
-		Plugin.LogFatal($"GameMap Finalize");
-	}
 }
 
-public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
+public class TileSerializer<T> : Serializer<T> where T : Tile {
+	/* Format:
+	 *  string prefabIdentifier
+	 *      Defaulting to prefab name, cuz I don't know a more reliably unique identifier
+	 *      that's also consistent with different tiles being added/removed
+	 *  (Tile*, int)[] doorways
+	 *		{Tile*	connection
+	 *		int		doorwayIndex}
+	*/
+	public override void Serialize(SerializationContext sc, object o) {
+		var tgt = (T)o;
+		// prefabIdentifier
+		sc.Add(tgt.GetSerializationId());
+		
+		// ushort doorways.length
+		sc.Add(((ushort)tgt.Doorways.Length).GetBytes());
+		foreach (Doorway d in tgt.Doorways) {
+			// Tile* connection
+			sc.AddReference(d.Connection?.Tile, this);
+			
+			// int doorwayIndex
+			if (d.Connection == null) {
+				sc.Add(((ushort)0).GetBytes());
+			} else {
+				sc.Add(
+					((ushort)Array.IndexOf(
+						d.Connection.Tile.Doorways, d.Connection
+					)).GetBytes()
+				);
+			}
+		}
+	}
 	
 	protected struct Context {
 		public GameMap parentMap;
@@ -548,8 +534,9 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 	}
 	
 	// Expects that ident has already been consumed
-	public virtual T Deserialize(object baseObj, DeserializationContext dc, object extraContext=null) {
-		var tile = (T)baseObj;
+	protected override T Deserialize(
+		T tile, DeserializationContext dc, object extraContext=null
+	) {
 		var c = (Context)extraContext;
 		GameMap parentMap = c.parentMap;
 		int address = c.address;
@@ -582,7 +569,7 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		}
 		return tile;
 	}
-	public T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		int address = dc.Address;
 		GameMap parentMap = (extraContext is Context c) ? (c.parentMap) : (extraContext as GameMap);
 		
@@ -600,7 +587,5 @@ public class TileDeserializer<T> : IDeserializer<T> where T : Tile {
 		return Deserialize(t, dc, new Context(address, parentMap));
 		
 	}
-
-	public virtual void Finalize(object obj) {}
 }
 

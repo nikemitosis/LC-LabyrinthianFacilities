@@ -14,7 +14,7 @@ using DunGen;
 class GenerateLevel {
 	
 	#if SETSEED
-	public int SetSeed = 0;
+	public static int SetSeed = 730112026;
 	#endif
 	
 	[HarmonyPatch("Generate")]
@@ -22,21 +22,23 @@ class GenerateLevel {
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		try {
 			Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
-			var flow = new DungeonFlowConverter(__instance.DungeonFlow);
+			var flow = new DungeonFlowConverter(
+				__instance.DungeonFlow,
+				#if SETSEED
+				SetSeed
+				#else
+				__instance.Seed
+				#endif
+			);
 			
 			MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
 				StartOfRound.Instance.currentLevel,
 				flow,
-				#if SETSEED
-				SetSeed,
-				#else
-				__instance.Seed,
-				#endif
 				(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 			));
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 		
 		return false;
@@ -62,7 +64,7 @@ class PreserveScrapPatch {
 			}
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 	}
 }
@@ -75,8 +77,8 @@ class FixLightningStrikingInactiveScrapPatch {
 		try {
 		___metalObjects.Clear();
 		} catch (Exception e) {
-			Plugin.LogError("what the f________?????????????????");
-			throw e;
+			Plugin.LogError(e.Message);
+			throw;
 		}
 	}
 }
@@ -91,7 +93,7 @@ class SaveMapsPatch {
 			MapHandler.Instance.SaveGame();
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 	}
 }
@@ -105,7 +107,7 @@ class SendMapsToClientPatch {
 			MapHandler.Instance.SendMapDataToClient(clientId);
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 	}
 }

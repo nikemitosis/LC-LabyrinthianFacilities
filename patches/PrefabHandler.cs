@@ -37,7 +37,7 @@ public class PrefabInitializer {
 			MapHandler.prefab = prefab;
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 	}
 }
@@ -52,7 +52,7 @@ public class PrefabSpawner {
 			GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
 		} catch (Exception e) {
 			Plugin.LogError(e.Message);
-			throw e;
+			throw;
 		}
 	}
 }
