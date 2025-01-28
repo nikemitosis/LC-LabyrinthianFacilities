@@ -159,10 +159,15 @@ public class Plugin : BaseUnityPlugin {
 		
 		Plugin.LogInfo("Creating Scrap & Equipment");
 		foreach (GrabbableObject grabbable in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
+			// exclude corpses
+			if (grabbable.GetType() == typeof(RagdollGrabbableObject)) continue;
+			
 			if (grabbable.itemProperties.isScrap) {
 				grabbable.gameObject.AddComponent<Scrap>();
-			} else if (grabbable.GetComponent<EnemyAI>() == null) {
+			} else if (
 				// exclude maneater (and hopefully catch custom enemies with a similar gimmick)
+				grabbable.GetComponent<EnemyAI>() == null 
+			) {
 				grabbable.gameObject.AddComponent<Equipment>();
 			}
 		}
@@ -238,6 +243,10 @@ public class MapHandler : NetworkBehaviour {
 		newmap.GenerationCompleteEvent += onComplete;
 		
 		return newmap;
+	}
+	
+	public void ClearActiveMap() {
+		this.activeMap = null;
 	}
 	
 	public IEnumerator Generate(
@@ -319,7 +328,11 @@ public class MapHandler : NetworkBehaviour {
 		this.unresolvedMaps.Add(m.name,m);
 	}
 	
-	
+	public void Clear() {
+		if (!(base.IsServer || base.IsHost)) return;
+		this.GetComponent<NetworkObject>().Despawn();
+		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
+	}
 	
 	public void SendMapDataToClient(ulong clientId) {
 		if (!(base.IsServer || base.IsHost)) return;

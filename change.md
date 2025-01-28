@@ -1,5 +1,5 @@
 # v0.2.1-beta
-## Patch 1
+## Patch 2
 
 ### Tweaks
 - When a map first generates, it generates 1.5x more tiles than normal. This is a band-aid fix to maps feeling too small in the beginning. 
@@ -9,6 +9,12 @@
   Rewrote prop handling to prioritize blockers, then deal with tile props (local props), then map props (global props). This should prevent blockers/fire exits from going missing. 
   - Currently as implemented, blocker props are only enabled if *all* doorways that use them agree to use them. This was to resolve an issue with Manor's CloverTile's Fireplace blocker. 
   - Door props (connectors & blocker) are not *enabled* when resolving tile prop/map props, but they may be *disabled*. 
+- [#10](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/10)
+  Fixed corpses being considered scrap
+- [#12](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/12)
+  Fixed leaving things at the company building causing them to appear on the previous moon
+- [#13](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/13)
+  Fixed MapHandler not resetting on game-over
 
 ### Code Changes
 - Refactored Serialization to unify it with Deserialization

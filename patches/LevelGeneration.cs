@@ -112,6 +112,24 @@ class SendMapsToClientPatch {
 	}
 }
 
+[HarmonyPatch(typeof(StartOfRound))]
+class StartOfRoundPatch {
+	[HarmonyPatch("OpenShipDoors")]
+	[HarmonyPrefix]
+	public static void ExcludeCompanyLevel() {
+		if (StartOfRound.Instance.currentLevel.name == "CompanyBuildingLevel") {
+			MapHandler.Instance.ClearActiveMap();
+		}
+	}
+	
+	[HarmonyPatch("ResetShip")]
+	[HarmonyPostfix]
+	public static void ResetMapHandler() {
+		SaveManager.DeleteFile($"{SaveManager.CurrentSave}.dat");
+		MapHandler.Instance.Clear();
+	}
+}
+
 [HarmonyPatch(typeof(ES3))]
 class DeleteFilePatch {
 	[HarmonyPatch("DeleteFile", new Type[]{typeof(ES3Settings)})]

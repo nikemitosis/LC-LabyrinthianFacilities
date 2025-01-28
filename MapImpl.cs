@@ -374,11 +374,6 @@ public class DTile : Tile {
 		Plugin.LogDebug("Getting bounds...");
 		#endif
 		Bounds bounds = this.DeriveBounds();
-		if (bounds.size == Vector3.zero) {
-			Plugin.LogError(
-				$"Tile '{this}' has zero-size. Tile will allow others to encroach on its area."
-			);
-		}
 		bounds.FixExtents();
 		this.bounding_box = bounds;
 		
