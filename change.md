@@ -1,5 +1,4 @@
 # v0.2.1-beta
-## Patch 2
 
 ### Tweaks
 - When a map first generates, it generates 1.5x more tiles than normal. This is a band-aid fix to maps feeling too small in the beginning. 
@@ -15,6 +14,8 @@
   Fixed leaving things at the company building causing them to appear on the previous moon
 - [#13](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/13)
   Fixed MapHandler not resetting on game-over
+- [#11](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/11)
+  Fixed objects on cruiser not sticking to cruiser
 
 ### Code Changes
 - Refactored Serialization to unify it with Deserialization

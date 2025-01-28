@@ -159,8 +159,11 @@ public class Plugin : BaseUnityPlugin {
 		
 		Plugin.LogInfo("Creating Scrap & Equipment");
 		foreach (GrabbableObject grabbable in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
-			// exclude corpses
-			if (grabbable.GetType() == typeof(RagdollGrabbableObject)) continue;
+			// exclude corpses & clipboards?
+			if (
+				grabbable.GetType() == typeof(RagdollGrabbableObject)
+				// || grabbable.GetType() == typeof(ClipboardItem)
+			) continue;
 			
 			if (grabbable.itemProperties.isScrap) {
 				grabbable.gameObject.AddComponent<Scrap>();

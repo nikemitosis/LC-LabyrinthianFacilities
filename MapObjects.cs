@@ -17,7 +17,6 @@ public class MapObject : MonoBehaviour {
 	}}
 	
 	public void FindParent(GameMap map=null) {
-		if (this.Grabbable.isInShipRoom) return;
 		map ??= MapHandler.Instance.ActiveMap;
 		
 		bool noparentfound = true;
@@ -40,9 +39,14 @@ public class MapObject : MonoBehaviour {
 			grabbable.transform.position
 		); // fix isInShipRoom for people joining partway through a save
 		
-		this.FindParent();
+		if (
+			!grabbable.isInShipRoom
+			&& this.transform.parent?.GetComponent<VehicleController>() == null // exclude things on cruiser
+		) {
+			this.FindParent();
+			this.gameObject.SetActive(false);
+		}
 		
-		if (!grabbable.isInShipRoom) this.gameObject.SetActive(false);
 	}
 	
 	public virtual void Restore() {
