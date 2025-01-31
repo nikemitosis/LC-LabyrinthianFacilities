@@ -1,27 +1,33 @@
-# v0.2.1-beta
+# v0.2.2
 
-### Tweaks
-- When a map first generates, it generates 1.5x more tiles than normal. This is a band-aid fix to maps feeling too small in the beginning. 
+### New Features
+ - [#3](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/3) Added loops
+   - The chance for two overlapping doorways to connect/disconnect is half the chance specified by DunGen. This is to reduce the chaos involved with toggling half the doorways every day. 
+   - Eventually I'd like to move to a system where even the original path along a set of tiles can be modified so you wouldn't necessarily be able to rely on the same path every day. 
+   I.e. no doorway connection would be considered "special" the way they are now; the extra connections for loops are explicitly added separately from the connections just to place two tiles together. Changes like this won't be for a while, though. 
+   
+ - [#7](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/7)
+   Added preservation of bees in between days. 
+   - Bees are preserved unless the beehive is in the ship room at the end of the day.
+   - Roaming bees will stay roaming if their beehive is left behind.
+     - If a beehive is left in a facility and gets destroyed, there will still be roaming bees for that day!
+   - Bees are not yet saved to file, so beehives all spawn with bees by default unless they are in the ship room. 
+     - If bees are roaming, they will be at their nest upon save-load. 
+     - This doesn't matter for most gameplay, but if you collect a beehive one day, leave it behind somewhere later on, then close and open the save, the beehive will magically respawn its bees. 
+	 - If you leave a hive in the facility and save-load, ***you will have bees in the facility.*** Do with this information what you will. 
 
 ### Bugfixes
-- [#9](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/9)
-  Rewrote prop handling to prioritize blockers, then deal with tile props (local props), then map props (global props). This should prevent blockers/fire exits from going missing. 
-  - Currently as implemented, blocker props are only enabled if *all* doorways that use them agree to use them. This was to resolve an issue with Manor's CloverTile's Fireplace blocker. 
-  - Door props (connectors & blocker) are not *enabled* when resolving tile prop/map props, but they may be *disabled*. 
-- [#10](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/10)
-  Fixed corpses being considered scrap
-- [#12](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/12)
-  Fixed leaving things at the company building causing them to appear on the previous moon
-- [#13](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/13)
-  Fixed MapHandler not resetting on game-over
-- [#11](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/11)
-  Fixed objects on cruiser not sticking to cruiser
+ - Fixed a bug that would cause GameMap to not remove items from `leavesByPos`. This was effectively a memory leak until the server shut down, but it also caused ghost connections to attempt to be created when creating loops. 
 
 ### Code Changes
-- Refactored Serialization to unify it with Deserialization
-- Returned to differentiating PropSets between local props and global props (and blockers/connectors)
-  - Attempting to unify them resulted in the map rarely having a valid configuration of Props s.t. the range of no PropSet was violated. Getting a "close" answer would sometimes result in arrangements of props that didn't make sense (missing blockers, missing fire exits)
-- Refactored GameMap, DDoorway, and DungeonFlowConverter to move all randomness to ITileGenerator
-- Fixed a bug where WeightedList\<T> wouldn't immediately throw an error if you tried to access an element at 0.0 when it had zero elements. (it would still result in an exception, just not one explicitly thrown by WeightedList\<T>)
-- Fixed a pseudo-bug where WeightedList\<T>[float] would throw an error if you passed the size of the list
-  - While this was originally intended behaviour, it made the pattern `list[list.SummedWeight*(float)Rng.NextDouble()]` throw unexpected errors on rare occassion (due to rounding error, presumably)
+ - Doorway
+   - Added an event `OnConnectEvent` for Doorway
+   - Changed the event name `OnDisconnect` to `OnDisconnectEvent`
+   - Changed DDoorway's static `DisconnectAction` to a nonstatic method `OnDisconnect`
+   - Simplified the process by which we disable blockers that should be inactive
+     - When handling door props, we check each door to see if it is in use. If it is, we disable all its blockers. Yes this is slow. 
+ - Added a class `ConnectionAction` to represent any action specifically involving a connection between two tiles
+   - `ConnectAction` now inherits from this
+   - A new class `DisconnectAction` represents the inverse of a ConnectAction
+ - Moved the invocation of `MapHandler.PreserveMapObjects` to be at a prefix of `RoundManager.UnloadSceneObjectsEarly` instead of `RoundManager.DespawnPropsAtEndOfRound` to allow the preservation of enemies (in particular, the bees of beehives)
+ - Added a class `Beehive` to represent beehives distinctly from normal `Scrap`. This is for beehives to store information about their bees. 

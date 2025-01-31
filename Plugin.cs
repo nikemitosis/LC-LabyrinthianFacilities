@@ -28,7 +28,7 @@ using Random = System.Random;
 public class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.2.0";
+	public const string VERSION = "0.2.2";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -36,7 +36,7 @@ public class Plugin : BaseUnityPlugin {
 	private static bool initializedAssets = false;
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
-	private static uint PROMOTE_LOG = 2;
+	private static uint PROMOTE_LOG = 0;
 	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
@@ -166,7 +166,11 @@ public class Plugin : BaseUnityPlugin {
 			) continue;
 			
 			if (grabbable.itemProperties.isScrap) {
-				grabbable.gameObject.AddComponent<Scrap>();
+				if (grabbable.name == "RedLocustHive") {
+					grabbable.gameObject.AddComponent<Beehive>();
+				} else {
+					grabbable.gameObject.AddComponent<Scrap>();
+				}
 			} else if (
 				// exclude maneater (and hopefully catch custom enemies with a similar gimmick)
 				grabbable.GetComponent<EnemyAI>() == null 
@@ -240,7 +244,6 @@ public class MapHandler : NetworkBehaviour {
 		
 		newmapobj = new GameObject();
 		newmapobj.transform.SetParent(this.gameObject.transform);
-		// newmapobj.transform.position -= Vector3.up * 200.0f;
 		
 		newmap = newmapobj.AddComponent<DGameMap>();
 		newmap.GenerationCompleteEvent += onComplete;

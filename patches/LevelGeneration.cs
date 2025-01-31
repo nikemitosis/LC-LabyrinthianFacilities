@@ -14,21 +14,23 @@ using DunGen;
 class GenerateLevel {
 	
 	#if SETSEED
-	public static int SetSeed = 730112026;
+	public static int SetSeed = 0;
 	#endif
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		try {
-			Plugin.LogInfo($"Custom Generate! (Seed={__instance.Seed})");
+			#if SETSEED
+			int seed = SetSeed;
+			#else
+			int seed = __instance.Seed;
+			#endif
+			
+			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
 				__instance.DungeonFlow,
-				#if SETSEED
-				SetSeed
-				#else
-				__instance.Seed
-				#endif
+				seed
 			);
 			
 			MapHandler.Instance.StartCoroutine(MapHandler.Instance.Generate(
@@ -54,7 +56,7 @@ class GenerateLevel {
 [HarmonyPatch(typeof(RoundManager))]
 class PreserveScrapPatch {
 	
-	[HarmonyPatch("DespawnPropsAtEndOfRound")]
+	[HarmonyPatch("UnloadSceneObjectsEarly")]
 	[HarmonyPrefix]
 	public static void PreserveScrap() {
 		try {
@@ -165,5 +167,30 @@ class DeleteFilePatch {
 			Plugin.LogError(e.Message);
 			throw e;
 		}
+	}
+}
+
+[HarmonyPatch(typeof(RedLocustBees))]
+public class RespawnBeesPatch {
+	/* SpawnHiveNearEnemy does the following:
+	 * 1. Spawns a hive (skipping)
+	 * 2. Sets `hive`
+	 * 3. intializes hive's grabbable object stuff (skipping since we already did that)
+	 * 4. sets `lastKnownHivePosition`
+	 * 5. Adds to RoundManager.totalScrapValueInLevel (skipping since it should be included already)
+	 * 6. Sets `hasSpawnedHive`
+	*/
+	[HarmonyPatch("SpawnHiveNearEnemy")]
+	[HarmonyPrefix]
+	public static bool DontSpawnNewHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
+		var flag = __instance.GetComponent<Beehive.DummyFlag>();
+		if (flag == null) return true;
+		MonoBehaviour.Destroy(flag);
+		
+		// (hive and lastKnownHivePosition are both set by Beehive.SpawnBees)
+		
+		___hasSpawnedHive = true;
+		
+		return false;
 	}
 }

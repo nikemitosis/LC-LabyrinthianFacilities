@@ -51,7 +51,6 @@ public class MapObject : MonoBehaviour {
 	
 	public virtual void Restore() {
 		this.gameObject.SetActive(true);
-		var grabbable = this.Grabbable;
 	}
 	
 	
@@ -86,6 +85,98 @@ public class Scrap : MapObject {
 			grabbable.radarIcon.gameObject.SetActive(true);
 		}
 	}
+}
+
+
+
+
+
+public class Beehive : Scrap {
+	
+	// The sole purpose of this is to mark a bee swarm that is intended to be paired with an 
+	// already-existing hive. 
+	public class DummyFlag : MonoBehaviour {}
+	
+	public struct BeeInfo {
+		public Vector3 position;
+		public int currentBehaviourStateIndex;
+		
+		public bool IsInvalid {get {return currentBehaviourStateIndex < 0;}}
+		
+		public BeeInfo(Vector3 position, int currentBehaviourStateIndex) {
+			this.position = position;
+			this.currentBehaviourStateIndex = currentBehaviourStateIndex;
+		}
+	}
+	
+	protected BeeInfo beeInfo = new BeeInfo(Vector3.zero, -1);
+	
+	protected GameObject beesPrefab = null;
+	protected virtual GameObject BeesPrefab {
+		get {
+			if (this.beesPrefab == null) {
+				foreach (RedLocustBees bees in Resources.FindObjectsOfTypeAll<RedLocustBees>()) {
+					if (bees.name == "RedLocustBees") {
+						this.beesPrefab = bees.gameObject; 
+						break;
+					}
+				}
+			}
+			return this.beesPrefab;
+		}
+	}
+	
+	protected virtual void OnEnable() {
+		if (this.GetComponentInParent<GameMap>() != null) {
+			SpawnBees();
+		}
+	}
+	
+	protected virtual RedLocustBees SpawnBees() {
+		if (!(NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer)) return null;
+		
+		if (this.beeInfo.IsInvalid) {
+			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);
+		}
+		GameObject g = GameObject.Instantiate(BeesPrefab, this.beeInfo.position, Quaternion.identity);
+		
+		RedLocustBees bees = g.GetComponent<RedLocustBees>();
+		bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
+		
+		bees.hive = this.Grabbable;
+		bees.lastKnownHivePosition = this.transform.position;
+		RoundManager.Instance.SpawnedEnemies.Add(bees);
+		
+		g.AddComponent<DummyFlag>();
+		g.GetComponent<NetworkObject>().Spawn();
+		return bees;
+	}
+	
+	public override void Preserve() {
+		base.Preserve();
+		
+		GrabbableObject grabbable = this.Grabbable;
+		if (grabbable.isInShipRoom) {
+			this.beeInfo = new BeeInfo(Vector3.zero, -1);
+			return;
+		}
+		
+		foreach (RedLocustBees swarm in Object.FindObjectsByType(
+			typeof(RedLocustBees), 
+			FindObjectsSortMode.None
+		)) {
+			if (swarm.hive == grabbable) {
+				this.beeInfo = new BeeInfo(
+					position: swarm.transform.position, 
+					currentBehaviourStateIndex: swarm.currentBehaviourStateIndex
+				);
+				return;
+			}
+		}
+		
+		Plugin.LogError($"Could not find bees for hive");
+	}
+	
 }
 
 public class Equipment : MapObject {

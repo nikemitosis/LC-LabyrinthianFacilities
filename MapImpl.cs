@@ -20,6 +20,15 @@ using Random = System.Random;
 public class DDoorway : Doorway {
 	// Properties
 	public Prop ActiveRandomObject {get {return activeRandomObject;}}
+	public IEnumerable<Prop> Blockers {get {
+		foreach (Prop p in alwaysBlockers) yield return p;
+		foreach (Prop p in randomBlockerSet) yield return p;
+	}}
+	// does not include any borrowed activeRandomObject
+	public IEnumerable<Prop> Connectors {get {
+		foreach (Prop p in alwaysDoors) yield return p;
+		foreach (Prop p in randomDoorSet) yield return p;
+	}}
 	
 	// Protected/Private
 	protected Prop[] alwaysBlockers;
@@ -69,7 +78,6 @@ public class DDoorway : Doorway {
 		
 		var prop = o.GetComponent<Prop>() ?? o.AddComponent<Prop>();
 		if (isblocker) {
-			prop.TotalBlockers++;
 			prop.IsBlocker = true;
 		} else {
 			prop.IsConnector = true;
@@ -84,7 +92,8 @@ public class DDoorway : Doorway {
 	}
 	
 	private void Awake() {
-		base.OnDisconnect += DDoorway.DisconnectAction;
+		base.OnDisconnectEvent += (Doorway) => this.OnDisconnect();
+		base.OnConnectEvent += (Doorway d1, Doorway d2) => this.OnConnect();
 	}
 	
 	public void InitSize() {
@@ -111,7 +120,7 @@ public class DDoorway : Doorway {
 			var blocker = dg.BlockerSceneObjects[i];
 			if (blocker == null) continue;
 			var b = instantiateSubPart(blocker,true);
-			b.Enable(true);
+			b.Enable();
 			objs.Add(b);
 		}
 		this.alwaysBlockers = objs.ToArray();
@@ -145,27 +154,20 @@ public class DDoorway : Doorway {
 		}
 	}
 	
-	// Overrides
-	public override void Connect(Doorway other) {
-		base.Connect(other);
-		this.OnConnect();
-		((DDoorway)other).OnConnect();
-	}
-	
 	// Native Methods
 	protected virtual void OnConnect() {
 		foreach (Prop obj in this.alwaysBlockers) {
-			obj.Disable(true);
+			obj.Disable();
 		}
 		foreach (Prop obj in this.alwaysDoors) {
 			obj.Enable();
 		}
-		this.activeRandomObject?.Disable(true);
+		this.activeRandomObject?.Disable();
 		this.activeRandomObject = null;
 	}
 	
 	public virtual void SetActiveObject(float idx) {
-		this.activeRandomObject?.Disable(true);
+		this.activeRandomObject?.Disable();
 		DDoorway con = (DDoorway)this.connection;
 		if (IsVacant) {
 			if (this.randomBlockerSet.Count == 0) {
@@ -184,9 +186,9 @@ public class DDoorway : Doorway {
 				this.activeRandomObject = this.randomDoorSet[this.randomDoorSet.SummedWeight * idx];
 			}
 		}
-		this.activeRandomObject?.Enable(IsVacant);
+		this.activeRandomObject?.Enable();
 		if (con != null) {
-			con.activeRandomObject?.Disable(true); 
+			con.activeRandomObject?.Disable(); 
 			con.activeRandomObject = this.activeRandomObject;
 		}
 	}
@@ -206,17 +208,16 @@ public class DDoorway : Doorway {
 		return rt;
 	}
 	
-	private static void DisconnectAction(Doorway door) {
-		var d = (DDoorway)door;
-		if (d == null) return;
-		foreach (Prop obj in d.alwaysBlockers) {
-			obj.Enable(true);
+	protected virtual void OnDisconnect() {
+		if (this == null) return;
+		foreach (Prop obj in this.alwaysBlockers) {
+			obj.Enable();
 		}
-		foreach (Prop obj in d.alwaysDoors) {
+		foreach (Prop obj in this.alwaysDoors) {
 			obj.Disable();
 		}
-		d.activeRandomObject?.Disable(true);
-		d.activeRandomObject = null;
+		this.activeRandomObject?.Disable();
+		this.activeRandomObject = null;
 	}
 }
 
@@ -226,29 +227,25 @@ public class Prop : MonoBehaviour {
 	public bool IsTileProp {get; set;} = false;
 	public bool IsMapProp  {get; set;} = false;
 	
-	public uint BlockerCount {get; private set;} = 0;
-	public uint TotalBlockers {get; set;} = 0;
-	
 	
 	public bool IsDoorProp => IsBlocker || IsConnector;
 	
+	public void SetActive(bool value) {if (value) Enable(); else Disable();}
 	
-	public bool SetActive(bool val) => (val ? Enable() : Disable());
-	
-	public virtual bool Enable(bool asBlocker=false) {
-		// Only enable a blocker if it is being requested as a blocker by all participating doorways
-		if (IsBlocker) {
-			if (asBlocker) BlockerCount++;
-			if (BlockerCount != TotalBlockers) return false;
+	public virtual void Enable() {
+		if (this == null) {
+			Plugin.LogError("Cannot enable a prop which has been destroyed");
+			return;
 		}
 		this.gameObject.SetActive(true);
-		return true;
 	}
 	
-	public virtual bool Disable(bool asBlocker=false) {
-		if (asBlocker && IsBlocker) BlockerCount--;
+	public virtual void Disable() {
+		if (this == null) {
+			Plugin.LogError("Cannot disable a prop which has been destroyed");
+			return;
+		}
 		this.gameObject.SetActive(false);
-		return true;
 	}
 }
 
@@ -532,7 +529,7 @@ public class DGameMap : GameMap {
 		}
 	}
 	
-	protected override bool PerformAction(GenerationAction action) {
+	public override bool PerformAction(GenerationAction action) {
 		if (action is PropAction propA) {
 			propA.Prop.SetActive(propA.Enable);
 		} else {
@@ -583,6 +580,10 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	public Random Rng {get {return rng;}}
 	public DunGen.Graph.DungeonFlow Flow {get {return flow;}}
+	// reduce chance because each doorway pair will likely get multiple chances to connect
+	// and we dont want loops to feel too chaotic
+	public float DoorwayConnectionChance {get {return flow.DoorwayConnectionChance / 2.0f;}}
+	public float DoorwayDisconnectChance {get {return flow.DoorwayConnectionChance / 2.0f;}}
 	
 	public DungeonFlowConverter(DungeonFlow flow, int seed) {
 		this.Seed = seed;
@@ -782,6 +783,46 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Done Generating Tiles!");
 	}
 	
+	protected IEnumerable<ConnectionAction> HandleConnections(GameMap map) {
+		// buffer actions so a connection can't be made and immediately disconnected 
+		// before the player ever sees it
+		List<ConnectionAction> actions = new();
+		foreach (var action in ConnectTiles(map)) {
+			actions.Add(action);
+		}
+		foreach (var action in DisconnectTiles(map)) {
+			actions.Add(action);
+		}
+		return actions;
+	}
+	
+	private IEnumerable<ConnectAction> ConnectTiles(GameMap map) {
+		Plugin.LogInfo($"Queueing making some loops...");
+		foreach (IList<Doorway> doorways in map.GetOverlappingLeaves()) {
+			if (doorways[0].Fits(doorways[1]) && Rng.NextDouble() < DoorwayConnectionChance) {
+				#if VERBOSE_GENERATION
+				Plugin.LogDebug(
+					$"C {doorways[0].Tile.name}.{doorways[0].name} | {doorways[1].Tile.name}.{doorways[1].name}"
+				);
+				#endif
+				yield return new ConnectAction(doorways[0], doorways[1]);
+			}
+		}
+	}
+	private IEnumerable<DisconnectAction> DisconnectTiles(GameMap map) {
+		Plugin.LogInfo($"Queueing removing some loops...");
+		foreach ((Doorway d1,Doorway d2) in map.GetExtraConnections()) {
+			if (Rng.NextDouble() < DoorwayDisconnectChance) {
+				#if VERBOSE_GENERATION
+				Plugin.LogDebug(
+					$"D {d1.Tile.name}.{d1.name} | {d2.Tile.name}.{d2.name}"
+				);
+				#endif
+				yield return new DisconnectAction(d1,d2);
+			}
+		}
+	}
+	
 	protected virtual IEnumerable<PropAction> HandleProps(DGameMap map) {
 		map.InitializeGlobalPropSets(this);
 		foreach (var i in HandleDoorProps(map)) yield return i;
@@ -793,11 +834,21 @@ public class DungeonFlowConverter : ITileGenerator {
 		#if VERBOSE_GENERATION
 		Plugin.LogDebug($"Handling random door objects...");
 		#endif
-		foreach (DDoorway door in map.GetComponentsInChildren<DDoorway>()) {
+		var doorways = map.GetComponentsInChildren<DDoorway>();
+		foreach (DDoorway door in doorways) {
 			if (door.ActiveRandomObject != null ) continue;
 			
 			DDoorway tgt = ((door.IsVacant || Rng.Next(2) == 0) ? (door) : ((DDoorway)door.Connection));
+			
 			tgt.SetActiveObject((float)Rng.NextDouble());
+		}
+		// Disable any blocker which should not be in use
+		foreach (DDoorway door in doorways) {
+			if (!door.IsVacant) {
+				foreach (Prop p in door.Blockers) {
+					yield return new PropAction(p, false);
+				}
+			}
 		}
 		yield break;
 	}
@@ -897,7 +948,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		}
 	}
 	
-	public IEnumerable<GenerationAction> Generator(GameMap m) {
+	public virtual IEnumerable<GenerationAction> Generator(GameMap m) {
 		DGameMap map = (DGameMap)m;
 		Tile start = GetStartTile();
 		
@@ -911,8 +962,11 @@ public class DungeonFlowConverter : ITileGenerator {
 				yield return action;
 			}
 		}
-		
 		foreach (var action in PlaceTiles(map)) {
+			yield return action;
+		}
+		
+		foreach (var action in HandleConnections(map)) {
 			yield return action;
 		}
 		
