@@ -28,7 +28,7 @@ using Random = System.Random;
 public class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.2.2";
+	public const string VERSION = "0.3.0";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -186,11 +186,11 @@ public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
-	private Dictionary<(SelectableLevel level, DungeonFlow flow),DGameMap> maps = null;
-	private Dictionary<string,DGameMap> unresolvedMaps;
-	private DGameMap activeMap = null;
+	private Dictionary<SelectableLevel,Moon> moons = null;
+	private Dictionary<string,Moon> unresolvedMoons = null;
+	private Moon activeMoon = null;
 	
-	public DGameMap ActiveMap {get {return activeMap;}}
+	public Moon ActiveMoon {get {return activeMoon;}}
 	
 	public override void OnNetworkSpawn() {
 		if (Instance != null) {
@@ -200,8 +200,8 @@ public class MapHandler : NetworkBehaviour {
 		Plugin.InitializeAssets();
 		Instance = this;
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
-		maps = new();
-		unresolvedMaps = new();
+		moons = new();
+		unresolvedMoons = new();
 		LoadGame();
 	}
 	public override void OnNetworkDespawn() {
@@ -215,79 +215,67 @@ public class MapHandler : NetworkBehaviour {
 		Instance.OnNetworkDespawn();
 	}
 	
+	public Moon GetMoon(SelectableLevel level) {
+		Moon moon;
+		if (!this.moons.TryGetValue(level, out moon)) {
+			string name = $"moon:{level.name}";
+			
+			if (!unresolvedMoons.TryGetValue(name, out moon)) {
+				moon = NewMoon();
+				moon.name = name;
+			} else {
+				unresolvedMoons.Remove(name);
+			}
+			
+			moon.name = name;
+			this.moons.Add(level, moon);
+		}
+		return moon;
+	}
+	
+	public Moon NewMoon() {
+		GameObject g = new GameObject();
+		g.transform.parent = this.transform;
+		return g.AddComponent<Moon>();
+	}
+	
 	public DGameMap GetMap(
-		SelectableLevel moon, 
+		SelectableLevel level, 
 		DungeonFlow flow, 
 		Action<GameMap> onComplete=null
 	) {
-		DGameMap map;
-		if (!this.maps.TryGetValue((moon,flow), out map)) {
-			string name = $"map:{moon.name}:{flow.name}";
-			
-			if (!unresolvedMaps.TryGetValue(name, out map)) {
-				map = NewMap(onComplete);
-			} else {
-				unresolvedMaps.Remove(name);
-			}
-			
-			map.name = name;
-			this.maps.Add((moon,flow), map);
-		}
-		return map;
+		return GetMoon(level).GetMap(flow,onComplete);
 	}
 	
-	public DGameMap NewMap(
-		Action<GameMap> onComplete=null
-	) {
-		GameObject newmapobj;
-		DGameMap newmap;
-		
-		newmapobj = new GameObject();
-		newmapobj.transform.SetParent(this.gameObject.transform);
-		
-		newmap = newmapobj.AddComponent<DGameMap>();
-		newmap.GenerationCompleteEvent += onComplete;
-		
-		return newmap;
-	}
-	
-	public void ClearActiveMap() {
-		this.activeMap = null;
+	public void ClearActiveMoon() {
+		this.activeMoon = null;
 	}
 	
 	public IEnumerator Generate(
-		SelectableLevel moon, 
+		SelectableLevel level, 
 		DungeonFlowConverter tilegen, 
 		Action<GameMap> onComplete=null
 	) {
-		if (this.activeMap != null) this.activeMap.gameObject.SetActive(false);
+		if (this.activeMoon != null) this.activeMoon.gameObject.SetActive(false);
 		
-		DGameMap map = GetMap(moon,tilegen.Flow); 
-		this.activeMap = map;
-		this.activeMap.gameObject.SetActive(true);
+		Moon moon = GetMoon(level);
+		this.activeMoon = moon;
+		this.activeMoon.gameObject.SetActive(true);
 		
-		map.GenerationCompleteEvent += onComplete;
-		map.TileInsertionEvent += tilegen.FailedPlacementHandler;
-		Plugin.LogInfo($"Generating tiles for {moon.name}, {tilegen.Flow}");
-		yield return map.GenerateCoroutine(tilegen);
-		map.TileInsertionEvent -= tilegen.FailedPlacementHandler;
-		map.GenerationCompleteEvent -= onComplete;
+		return this.activeMoon.Generate(tilegen, onComplete);
 	}
 	
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveMapObjects() {
 		Plugin.LogInfo("Hiding Map Objects!");
-		this.activeMap?.PreserveMapObjects();
+		this.activeMoon?.PreserveMapObjects();
 	}
 	
 	public void DestroyAllScrap() {
 		Plugin.LogInfo("Destroying all scrap :(");
-		foreach (var entry in maps) {
-			entry.Value.DestroyAllScrap();
-		}
-		foreach (var entry in unresolvedMaps) {
-			entry.Value.DestroyAllScrap();
+		foreach (Scrap s in this.GetComponentsInChildren<Scrap>(includeInactive:true)) {
+			GameObject.Destroy(s.gameObject);
 		}
 	}
 	
@@ -328,10 +316,10 @@ public class MapHandler : NetworkBehaviour {
 			Plugin.LogInfo($"No save data found for {GameNetworkManager.Instance.currentSaveFileName}");
 		}
 	}
-	public void LoadMap(DGameMap m) {
+	public void LoadMoon(Moon m) {
 		m.transform.parent = this.transform;
 		// m.transform.position -= Vector3.up * 200.0f;
-		this.unresolvedMaps.Add(m.name,m);
+		this.unresolvedMoons.Add(m.name,m);
 	}
 	
 	public void Clear() {
@@ -397,6 +385,86 @@ public class MapHandler : NetworkBehaviour {
 		using (FileStream fs = File.Open($"{SaveManager.ModSaveDirectory}/debug.dat", FileMode.Create)) {
 			foreach (byte b in bytes) {
 				fs.WriteByte(b);
+			}
+		}
+	}
+}
+
+public class Moon : MonoBehaviour {
+	protected Dictionary<DungeonFlow,DGameMap> maps = new();
+	protected Dictionary<string,DGameMap> unresolvedMaps = new();
+	
+	public DGameMap ActiveMap {get; private set;}
+	
+	private void OnDisable() {
+		// Prevent ActiveMap from getting briefly enabled when swapping to this moon but a different interior
+		// (To prevent OnEnable of children from executing when they will be immediately disabled)
+		this.ActiveMap?.gameObject?.SetActive(false);
+		this.ActiveMap = null;
+	}
+	
+	public DGameMap GetMap(DungeonFlow flow, Action<GameMap> onComplete=null) {
+		if (!maps.TryGetValue(flow, out DGameMap map)) {
+			string name = $"interior:{flow.name}";
+			if (!unresolvedMaps.TryGetValue(name, out map)) {
+				map = NewMap(onComplete);
+				map.name = name;
+			} else {
+				unresolvedMaps.Remove(name);
+			}
+			maps.Add(flow,map);
+		}
+		return map;
+	}
+	
+	public DGameMap NewMap(
+		Action<GameMap> onComplete=null
+	) {
+		GameObject newmapobj;
+		DGameMap newmap;
+		
+		newmapobj = new GameObject();
+		newmapobj.transform.SetParent(this.transform);
+		
+		newmap = newmapobj.AddComponent<DGameMap>();
+		newmap.GenerationCompleteEvent += onComplete;
+		
+		return newmap;
+	}
+	
+	public void LoadMap(DGameMap map) {
+		this.unresolvedMaps.Add(map.name,map);
+		map.transform.parent = this.transform;
+	}
+	
+	public IEnumerator Generate(
+		DungeonFlowConverter tilegen, 
+		Action<GameMap> onComplete=null
+	) {
+		if (this.ActiveMap != null) this.ActiveMap.gameObject.SetActive(false);
+		this.ActiveMap = GetMap(tilegen.Flow);
+		this.ActiveMap.gameObject.SetActive(true);
+		
+		this.ActiveMap.GenerationCompleteEvent += onComplete;
+		this.ActiveMap.TileInsertionEvent += tilegen.FailedPlacementHandler;
+		Plugin.LogInfo($"Generating tiles for {this.name}:{this.ActiveMap.name}:{tilegen.Flow.name}");
+		yield return this.ActiveMap.GenerateCoroutine(tilegen);
+		this.ActiveMap.TileInsertionEvent -= tilegen.FailedPlacementHandler;
+		this.ActiveMap.GenerationCompleteEvent -= onComplete;
+		
+		this.RestoreMapObjects();
+	}
+	
+	public void PreserveMapObjects() {
+		Plugin.LogInfo("Hiding Map Objects!");
+		this.ActiveMap?.PreserveMapObjects();
+	}
+	
+	public void RestoreMapObjects() {
+		foreach (Transform child in this.transform) {
+			var mapObj = child.GetComponent<MapObject>();
+			if (mapObj != null) {
+				mapObj.Restore();
 			}
 		}
 	}
@@ -515,15 +583,15 @@ internal static class SaveManager {
 }
 
 public class MapHandlerSerializer : Serializer<MapHandler> {
-	public override void Serialize(SerializationContext sc, object o) {
+	public override void Serialize(SerializationContext sc, MapHandler o) {
 		if (!ReferenceEquals(o,MapHandler.Instance)) {
 			throw new ArgumentException($"MapHandler singleton violated");
 		}
-		var maps = MapHandler.Instance.GetComponentsInChildren<DGameMap>(true);
-		sc.Add((ushort)(maps.Length));
-		var serializer = new DGameMapSerializer();
-		foreach (DGameMap map in maps) {
-			sc.AddReference(map, serializer);
+		var moons = MapHandler.Instance.GetComponentsInChildren<Moon>(true);
+		sc.Add((ushort)(moons.Length));
+		var serializer = new MoonSerializer();
+		foreach (Moon moon in moons) {
+			sc.AddInline(moon, serializer);
 		}
 	}
 	
@@ -538,14 +606,9 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 		
 		// Captures for lambda
 		var rt = MapHandler.Instance;
-		var mapDeserializer = new DGameMapSerializer();
-		var tileDeserializer = new DTileSerializer();
+		var moonDeserializer = new MoonSerializer();
 		for (int i=0; i<numMaps; i++) {
-			dc.ConsumeReference(
-				mapDeserializer,
-				(object s) => rt.LoadMap((DGameMap)s),
-				tileDeserializer
-			);
+			rt.LoadMoon((Moon)dc.ConsumeInline(moonDeserializer));
 		}
 		
 		return rt;
@@ -558,29 +621,173 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 }
 
 public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
-	public override void Serialize(SerializationContext sc, object obj) {
-		MapHandler item = (MapHandler)obj;
+	public override void Serialize(SerializationContext sc, MapHandler item) {
 		
-		DGameMap[] maps = item.GetComponentsInChildren<DGameMap>(true);
-		sc.Add((ushort)maps.Length);
-		var mapSerializer = new DGameMapNetworkSerializer();
-		foreach (DGameMap map in maps) {
-			sc.AddInline(map,mapSerializer);
+		Moon[] moons = item.GetComponentsInChildren<Moon>(true);
+		sc.Add((ushort)moons.Length);
+		var serializer = new MoonNetworkSerializer();
+		foreach (Moon moon in moons) {
+			sc.AddInline(moon,serializer);
 		}
 	}
 	
 	protected override MapHandler Deserialize(
 		MapHandler tgt, DeserializationContext dc, object extraContext=null
 	) {
-		dc.Consume(sizeof(ushort)).CastInto(out ushort numMaps);
-		var ds = new DGameMapNetworkSerializer();
-		for (ushort i=0; i<numMaps; i++) {
-			dc.ConsumeInline(ds);
+		dc.Consume(sizeof(ushort)).CastInto(out ushort numMoons);
+		var ds = new MoonNetworkSerializer();
+		for (ushort i=0; i<numMoons; i++) {
+			tgt.LoadMoon((Moon)dc.ConsumeInline(ds));
 		}
 		return tgt;
 	}
 	
 	public override MapHandler Deserialize(DeserializationContext dc, object extraContext=null) {
 		return Deserialize(MapHandler.Instance,dc,extraContext);
+	}
+}
+
+public class MoonSerializer : Serializer<Moon> {
+	private void SerializeMapObjects<T>(
+		SerializationContext sc, 
+		Moon moon, 
+		Serializer<T> ser
+	) where T : MapObject {
+		List<T> objs = new(moon.transform.childCount);
+		foreach (Transform child in moon.transform) {
+			T item = child.GetComponent<T>();
+			if (item != null) objs.Add(item);
+		}
+		sc.Add((ushort)objs.Count);
+		foreach (T o in objs) {
+			sc.AddInline(o, ser);
+		}
+	}
+	
+	public override void Serialize(SerializationContext sc, Moon moon) {
+		sc.Add(moon.name + "\0");
+		
+		// Serialize MapObjects
+		SerializeMapObjects<Scrap>(sc,moon,new ScrapSerializer());
+		SerializeMapObjects<Equipment>(sc,moon,new EquipmentSerializer());
+		
+		// Serialize maps
+		DGameMap[] maps = moon.GetComponentsInChildren<DGameMap>(true);
+		sc.Add((ushort)maps.Length);
+		var ser = new DGameMapSerializer();
+		foreach (DGameMap map in maps) {
+			sc.AddInline(map,ser);
+		}
+	}
+	
+	private void DeserializeMapObjects<T>(
+		Moon moon, DeserializationContext dc, ISerializer<T> ds
+	)
+		where T : MapObject
+	{
+		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
+		#if VERBOSE_DESERIALIZE
+			Plugin.LogDebug(
+				$"Loading {count} {typeof(T)} objects for Moon '{moon.name}' from address 0x{dc.Address:X}"
+			);
+		#endif
+		
+		for (ushort i=0; i<count; i++) {
+			dc.ConsumeInline(ds,moon);
+		}
+	}
+	
+	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+		
+		DeserializeMapObjects<Scrap    >(moon,dc,new ScrapSerializer());
+		DeserializeMapObjects<Equipment>(moon,dc,new EquipmentSerializer());
+		
+		dc.Consume(2).CastInto(out ushort numMaps);
+		var ser = new DGameMapSerializer();
+		for (int i=0; i<numMaps; i++) {
+			moon.LoadMap((DGameMap)dc.ConsumeInline(ser));
+		}
+		
+		return moon;
+	}
+	
+	public override Moon Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.ConsumeUntil(
+			(byte b) => (b == 0)
+		).CastInto(out string id);
+		dc.Consume(1); // null terminator
+		
+		Moon rt = new GameObject(id).AddComponent<Moon>();
+		return Deserialize(rt, dc, extraContext);
+	}
+}
+
+public class MoonNetworkSerializer : Serializer<Moon> {
+	private void SerializeMapObjects<T>(
+		SerializationContext sc, 
+		Moon moon, 
+		Serializer<T> ser
+	) where T : MapObject {
+		List<T> objs = new(moon.transform.childCount);
+		foreach (Transform child in moon.transform) {
+			T item = child.GetComponent<T>();
+			if (item != null) objs.Add(item);
+		}
+		sc.Add((ushort)objs.Count);
+		foreach (T o in objs) {
+			sc.AddInline(o, ser);
+		}
+	}
+	
+	public override void Serialize(SerializationContext sc, Moon moon) {
+		sc.Add(moon.name+"\0");
+		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer());
+		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer());
+	}
+	
+	private void DeserializeMapObjects<T>(
+		Moon moon, DeserializationContext dc, ISerializer<T> ds
+	)
+		where T : MapObject
+	{
+		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
+		#if VERBOSE_DESERIALIZE
+			Plugin.LogDebug(
+				$"Loading {count} {typeof(T)} objects for Moon '{moon.name}' from address 0x{dc.Address:X}"
+			);
+		#endif
+		
+		for (ushort i=0; i<count; i++) {
+			dc.ConsumeInline(ds,moon);
+		}
+	}
+	
+	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+		DeserializeMapObjects<Scrap    >(moon, dc, new ScrapNetworkSerializer());
+		DeserializeMapObjects<Equipment>(moon, dc, new EquipmentNetworkSerializer());
+		
+		dc.Consume(2).CastInto(out ushort numMaps);
+		var ds = new DGameMapNetworkSerializer();
+		for (ushort i=0; i<numMaps; i++) {
+			dc.ConsumeInline(ds, moon);
+		}
+		
+		return moon;
+	}
+	
+	public override Moon Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.ConsumeUntil(
+			(byte b) => (b == 0)
+		).CastInto(out string id);
+		dc.Consume(1); // null terminator
+		
+		return Deserialize(
+			MapHandler.Instance.transform.Find(id).GetComponent<Moon>(),
+			dc, extraContext
+		);
+	}
+	
+	public override void Finalize(Moon moon) {
+		moon.gameObject.SetActive(false);
 	}
 }

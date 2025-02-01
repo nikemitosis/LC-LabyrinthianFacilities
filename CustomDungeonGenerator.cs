@@ -105,7 +105,7 @@ public class Tile : MonoBehaviour {
 		get {return this.doorways ??= this.GetComponentsInChildren<Doorway>();}
 	}
 	public Bounds BoundingBox {get {return this.bounding_box;}}
-	public GameMap Map {get {return this.GetComponentInParent<GameMap>();}}
+	public GameMap Map {get {return this.GetComponentInParent<GameMap>(true);}}
 	
 	// Protected/Private
 	protected Doorway[] doorways = null;
@@ -533,8 +533,7 @@ public class GameMapSerializer<T,TTile,TTileSer> : Serializer<T>
 	 *   Name
 	 *   RootTile
 	*/
-	public override void Serialize(SerializationContext sc, object o) {
-		var map = (T)o;
+	public override void Serialize(SerializationContext sc, T map) {
 		sc.Add(map.name.GetBytes());
 		sc.Add(new byte[1]{0});
 		
@@ -542,8 +541,9 @@ public class GameMapSerializer<T,TTile,TTileSer> : Serializer<T>
 	}
 	
 	// Expects that ident has already been consumed
+	// extraContext is TTileSer that deserializes tiles, or null for a default deserializer
 	protected override T Deserialize(T map, DeserializationContext dc, object extraContext=null) {
-		var tileDeserializer = ((TileSerializer<TTile>)extraContext) ?? new TileSerializer<TTile>();
+		var tileDeserializer = ((TTileSer)extraContext) ?? new TTileSer();
 		
 		map.AddTile(new PlacementInfo((TTile)dc.ConsumeInline(tileDeserializer,map)));
 		
@@ -570,8 +570,7 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 	 *		{Tile*	connection
 	 *		int		doorwayIndex}
 	*/
-	public override void Serialize(SerializationContext sc, object o) {
-		var tgt = (T)o;
+	public override void Serialize(SerializationContext sc, T tgt) {
 		// prefabIdentifier
 		sc.Add(tgt.GetSerializationId());
 		
@@ -594,29 +593,17 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 		}
 	}
 	
-	protected struct Context {
-		public GameMap parentMap;
-		public int address;
-		
-		public Context(int address,GameMap parentMap=null) {
-			this.parentMap = parentMap;
-			this.address = address;
-		}
-	}
-	
-	// Expects that ident has already been consumed
 	protected override T Deserialize(
 		T tile, DeserializationContext dc, object extraContext=null
 	) {
-		var c = (Context)extraContext;
-		GameMap parentMap = c.parentMap;
-		int address = c.address;
+		GameMap parentMap = (GameMap)extraContext;
+		int address = dc.Address;
 		bool hasConnected = false;
 		
 		dc.Consume(2).CastInto(out ushort numDoors);
 		for (int didx=0; didx<numDoors; didx++) {
 			int thisDoorIndex = didx;
-			int tileConnection = dc.ConsumeReference(this, context: extraContext);
+			int tileConnection = dc.ConsumeReference(this, context: parentMap);
 			dc.Consume(2).CastInto(out ushort otherDoorIndex);
 			
 			if (tileConnection == 0) continue;
@@ -651,9 +638,16 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 		}
 		return tile;
 	}
+	
+	// extraContext is parent map
 	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		int address = dc.Address;
-		GameMap parentMap = (extraContext is Context c) ? (c.parentMap) : (extraContext as GameMap);
+		GameMap parentMap = (GameMap)extraContext;
+		if (parentMap == null) {
+			throw new InvalidCastException(
+				$"{extraContext} could not be cast into a {nameof(GameMap)}"
+			);
+		}
 		
 		dc.ConsumeUntil(
 			(byte b) => b == 0
@@ -662,11 +656,11 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 		
 		// The fact that I can't do T.GetPrefab is the dumbest shit. 
 		// Why does C# hate static methods so much??
-		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap?.transform);
+		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap.transform);
 		if (t == null) {
 			throw new NullReferenceException($"Could not find a prefab with id '{id}'");
 		}
-		return Deserialize(t, dc, new Context(address, parentMap));
+		return Deserialize(t, dc, parentMap);
 		
 	}
 }

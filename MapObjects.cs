@@ -6,6 +6,7 @@ using System.Collections.Generic;
 using UnityEngine;
 using Unity.Netcode;
 
+using DgConversion;
 using Serialization;
 using Util;
 
@@ -16,21 +17,36 @@ public class MapObject : MonoBehaviour {
 		return this.GetComponent<GrabbableObject>();
 	}}
 	
-	public void FindParent(GameMap map=null) {
-		map ??= MapHandler.Instance.ActiveMap;
+	public Transform FindParent(DGameMap map=null, Moon moon=null, bool? includeInactive=null) {
+		moon ??= map?.Moon ?? MapHandler.Instance.ActiveMoon;
+		map ??= moon?.ActiveMap;
+		if (map == null) {
+			if (moon != null) {
+				this.transform.parent = moon.transform;
+				return this.transform.parent;
+			}
+			
+			throw new NullReferenceException($"No active/provided map to parent MapObject");
+		}
 		
 		bool noparentfound = true;
-		foreach (Tile t in map.GetComponentsInChildren<Tile>()) {
+		foreach (Tile t in map.GetComponentsInChildren<Tile>(
+			includeInactive ?? map.gameObject.activeInHierarchy
+		)) {
 			if (t.BoundingBox.Contains(this.transform.position)) {
 				this.transform.parent = t.transform;
 				noparentfound = false; break;
 			}
 		} if (noparentfound) {
-			this.transform.parent = map.transform;
+			Plugin.LogFatal($"No tile parent found for {this.name} @ {this.transform.position}");
+			Plugin.LogFatal($"(map @ {map.transform.position})");
+			this.transform.parent = moon.transform;
 		}
 		this.Grabbable.targetFloorPosition 
 			= this.Grabbable.startFallingPosition 
 			= this.transform.localPosition;
+		
+		return this.transform.parent;
 	}
 	
 	public virtual void Preserve() {
@@ -66,6 +82,10 @@ public class Scrap : MapObject {
 		return null;
 	}
 	
+	protected virtual void OnDestroy() {
+		GameObject.Destroy(this.Grabbable.radarIcon?.gameObject);
+	}
+	
 	public override void Preserve() {
 		base.Preserve();
 		var grabbable = this.Grabbable;
@@ -87,11 +107,11 @@ public class Scrap : MapObject {
 	}
 }
 
-
-
-
-
 public class Beehive : Scrap {
+	
+	private bool IsServer {
+		get {return NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer;}
+	}
 	
 	// The sole purpose of this is to mark a bee swarm that is intended to be paired with an 
 	// already-existing hive. 
@@ -110,6 +130,7 @@ public class Beehive : Scrap {
 	}
 	
 	protected BeeInfo beeInfo = new BeeInfo(Vector3.zero, -1);
+	protected RedLocustBees bees = null;
 	
 	protected GameObject beesPrefab = null;
 	protected virtual GameObject BeesPrefab {
@@ -128,12 +149,23 @@ public class Beehive : Scrap {
 	
 	protected virtual void OnEnable() {
 		if (this.GetComponentInParent<GameMap>() != null) {
-			SpawnBees();
+			this.bees = SpawnBees();
+		}
+	}
+	
+	protected virtual void OnDisable() {
+		if (
+			IsServer
+			&& this.bees != null 
+			&& this.bees.IsSpawned
+		) {
+			this.bees.GetComponent<NetworkObject>().Despawn();
+			this.bees = null;
 		}
 	}
 	
 	protected virtual RedLocustBees SpawnBees() {
-		if (!(NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer)) return null;
+		if (!IsServer) return null;
 		
 		if (this.beeInfo.IsInvalid) {
 			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);
@@ -161,20 +193,27 @@ public class Beehive : Scrap {
 			return;
 		}
 		
-		foreach (RedLocustBees swarm in Object.FindObjectsByType(
-			typeof(RedLocustBees), 
-			FindObjectsSortMode.None
-		)) {
-			if (swarm.hive == grabbable) {
-				this.beeInfo = new BeeInfo(
-					position: swarm.transform.position, 
-					currentBehaviourStateIndex: swarm.currentBehaviourStateIndex
-				);
+		if (this.bees == null) {
+			foreach (RedLocustBees swarm in Object.FindObjectsByType(
+				typeof(RedLocustBees), 
+				FindObjectsSortMode.None
+			)) {
+				if (swarm.hive == grabbable) {
+					this.bees = swarm;
+					break;
+				}
+			}
+			if (this.bees == null) {
+				Plugin.LogError($"Could not find bees for hive");
 				return;
 			}
 		}
 		
-		Plugin.LogError($"Could not find bees for hive");
+		this.beeInfo = new BeeInfo(
+			position: this.bees.transform.position, 
+			currentBehaviourStateIndex: this.bees.currentBehaviourStateIndex
+		);
+		
 	}
 	
 }
@@ -198,8 +237,7 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 	 * Identifier: string
 	 * position: Vector3 
 	*/
-	public override void Serialize(SerializationContext sc, object t) {
-		var tgt = (MapObject)t;
+	public override void Serialize(SerializationContext sc, T tgt) {
 		sc.Add(tgt.name.Substring(0,tgt.name.Length - "(Clone)".Length));
 		sc.Add(new byte[]{(byte)0});
 		
@@ -209,8 +247,6 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 	}
 	
 	protected override T Deserialize(T rt, DeserializationContext dc, object extraContext=null) {
-		GameMap parentMap = (GameMap)extraContext;
-		
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
@@ -218,7 +254,13 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		
 		rt.transform.position = new Vector3(x,y,z);
 		
-		rt.FindParent(parentMap);
+		if (extraContext is Moon moon) {
+			rt.transform.parent = moon.transform;
+		} else if (extraContext is DGameMap map) {
+			rt.transform.parent = map.transform;
+		} else {
+			throw new NullReferenceException($"No moon or map provided for MapObject {rt} to parent to.");
+		}
 		return rt;
 	}
 	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
@@ -243,9 +285,8 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	 *     base
 	 *     ScrapValue: int
 	*/
-	public override void Serialize(SerializationContext sc, object tgt) {
-		base.Serialize(sc,tgt);
-		var scrap = (Scrap)tgt;
+	public override void Serialize(SerializationContext sc, Scrap scrap) {
+		base.Serialize(sc,scrap);
 		sc.Add(scrap.Grabbable.scrapValue);
 	}
 	
@@ -265,12 +306,13 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 
 public class EquipmentSerializer : MapObjectSerializer<Equipment> {
 	public override Equipment GetPrefab(string id) => Equipment.GetPrefab(id);
+	
+	public override void Serialize(SerializationContext sc, Equipment eq) => base.Serialize(sc,eq);
 }
 
-// extraContext is GameMap that this is parented to
+// extraContext is DGameMap or Moon that this is parented to
 public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
-	public override void Serialize(SerializationContext sc, object o) {
-		T obj = (T)o;
+	public override void Serialize(SerializationContext sc, T obj) {
 		var netObj = obj.GetComponent<NetworkObject>();
 		if (!(netObj?.IsSpawned ?? false)) {
 			throw new InvalidOperationException(
@@ -283,7 +325,15 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	protected override T Deserialize(
 		T s, DeserializationContext dc, object extraContext=null
 	) {
-		s.FindParent((GameMap)extraContext);
+		if (extraContext is DGameMap map) {
+			s.FindParent(map: map);
+		} else if (extraContext is Moon moon) {
+			s.FindParent(moon: moon);
+		} else {
+			try {s.FindParent();} catch (NullReferenceException) {
+				throw new NullReferenceException("No moon/map provided to network-deserialized MapObject");
+			}
+		}
 		
 		return s;
 	}
@@ -299,9 +349,8 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 }
 
 public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
-	public override void Serialize(SerializationContext sc, object o) {
-		base.Serialize(sc,o);
-		Scrap s = (Scrap)o;
+	public override void Serialize(SerializationContext sc, Scrap s) {
+		base.Serialize(sc,s);
 		sc.Add(s.Grabbable.scrapValue);
 	}
 	

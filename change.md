@@ -1,33 +1,33 @@
-# v0.2.2
+# v0.3.0
+
+### TODO
+ - For Release (Im writing this here because if I don't I *will* forget one of these :P)
+   - Update version number
+   - Disable verbose logging (if it is on)
+   - Disable SetSeed (if it is on)
+   - Disable log promotion (if it is on)
+ - Actual development
+   - [#1 - Company Cruiser Saving](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/1)
+   - [#8 - Optimize prop serialization](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/8)
+
 
 ### New Features
- - [#3](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/3) Added loops
-   - The chance for two overlapping doorways to connect/disconnect is half the chance specified by DunGen. This is to reduce the chaos involved with toggling half the doorways every day. 
-   - Eventually I'd like to move to a system where even the original path along a set of tiles can be modified so you wouldn't necessarily be able to rely on the same path every day. 
-   I.e. no doorway connection would be considered "special" the way they are now; the extra connections for loops are explicitly added separately from the connections just to place two tiles together. Changes like this won't be for a while, though. 
-   
- - [#7](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/7)
-   Added preservation of bees in between days. 
-   - Bees are preserved unless the beehive is in the ship room at the end of the day.
-   - Roaming bees will stay roaming if their beehive is left behind.
-     - If a beehive is left in a facility and gets destroyed, there will still be roaming bees for that day!
-   - Bees are not yet saved to file, so beehives all spawn with bees by default unless they are in the ship room. 
-     - If bees are roaming, they will be at their nest upon save-load. 
-     - This doesn't matter for most gameplay, but if you collect a beehive one day, leave it behind somewhere later on, then close and open the save, the beehive will magically respawn its bees. 
-	 - If you leave a hive in the facility and save-load, ***you will have bees in the facility.*** Do with this information what you will. 
+ - [#2](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/2)
+   Made the surfaces of moons distinct from their interiors. If you bring scrap outside, it will still be outside if you take off and come back, even if a different interior is used. 
 
-### Bugfixes
- - Fixed a bug that would cause GameMap to not remove items from `leavesByPos`. This was effectively a memory leak until the server shut down, but it also caused ghost connections to attempt to be created when creating loops. 
+### Bug fixes
+ - Fixed a bug where radar icons for scrap would still appear if the scrap was destroyed during map generation. 
 
 ### Code Changes
- - Doorway
-   - Added an event `OnConnectEvent` for Doorway
-   - Changed the event name `OnDisconnect` to `OnDisconnectEvent`
-   - Changed DDoorway's static `DisconnectAction` to a nonstatic method `OnDisconnect`
-   - Simplified the process by which we disable blockers that should be inactive
-     - When handling door props, we check each door to see if it is in use. If it is, we disable all its blockers. Yes this is slow. 
- - Added a class `ConnectionAction` to represent any action specifically involving a connection between two tiles
-   - `ConnectAction` now inherits from this
-   - A new class `DisconnectAction` represents the inverse of a ConnectAction
- - Moved the invocation of `MapHandler.PreserveMapObjects` to be at a prefix of `RoundManager.UnloadSceneObjectsEarly` instead of `RoundManager.DespawnPropsAtEndOfRound` to allow the preservation of enemies (in particular, the bees of beehives)
- - Added a class `Beehive` to represent beehives distinctly from normal `Scrap`. This is for beehives to store information about their bees. 
+ - Removed `DGameMap.DestroyAllScrap`, put the functionality in `MapHandler.DestroyAllScrap`
+ - Changed `Serializer<T>` so the method `Serialize` and `Finalize` could be written with better typing. It still won't generate compile-time errors for mistakes, but it's prettier to read for inheriting classes. 
+ - Changed `MapObject.FindParent` to include two new (optional) paramters
+   1. A `Moon` 'moon' to parent to if the map had no tiles for the `MapObject` to parent to (where it would've previously parented to the map. 
+   2. A `bool?` 'includeInactive' for whether to include inactive tiles in the search for a tile to parent to.
+      - Defaults to `null`, which means to include inactive tiles only if the map itself is inactive. 
+ - Reorganized patches
+   - Moved patches relating to saving from `patches/LevelGeneration.cs` to `patches/Saving.cs`
+   - Renamed and repurposed `PrefabHandler.cs` to be for any networking-related patches instead of just initializing network prefabs. 
+     - New name is `Networking.cs`
+ - Added an `InvalidOperationException` to `DTile` if it is initialized while inactive
+    - This was to avoid the situation where a tile would attempt to get its bounds from a collider while inactive, since collider bounds are uninitialized until the gameobject becomes active. 

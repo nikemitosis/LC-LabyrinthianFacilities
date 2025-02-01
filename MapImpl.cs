@@ -293,12 +293,16 @@ public class DTile : Tile {
 	private Bounds DeriveBounds() {
 		Bounds bounds;
 		var dungenTile = this.GetComponent<DunGen.Tile>();
-		if (dungenTile.OverrideAutomaticTileBounds) {
+		if (dungenTile.OverrideAutomaticTileBounds && dungenTile.TileBoundsOverride.extents != Vector3.zero) {
 			return dungenTile.TileBoundsOverride;
 		}
 		#if VERBOSE_GENERATION
 		Plugin.LogDebug($"Tile {this.gameObject} had no predefined bounds");
 		#endif
+		
+		if (!this.gameObject.activeInHierarchy) {
+			throw new InvalidOperationException($"Tile {this.name} is not active; cannot derive bounds");
+		}
 		
 		bounds = new Bounds(Vector3.zero,Vector3.zero);
 		// manor tiles all use mesh
@@ -314,7 +318,7 @@ public class DTile : Tile {
 			Plugin.LogDebug($"Unable to find easy meshcollider for {this}");
 			#endif
 			
-			var colliders = this.transform.Find("Meshes")?.GetComponentsInChildren<MeshCollider>();
+			var colliders = this.transform.Find("Meshes")?.GetComponentsInChildren<MeshCollider>(true);
 			foreach (Collider c in colliders ?? (Collider[])[]) {
 				bounds.Encapsulate(c.bounds);
 			}
@@ -322,8 +326,8 @@ public class DTile : Tile {
 			if (bounds.extents == Vector3.zero) {
 				// cave tiles all have first meshcollider as room bounds (I think)
 				collider = (
-					this.GetComponentInChildren<MeshCollider>()
-					?? this.GetComponentInChildren<Collider>()
+					this.GetComponentInChildren<MeshCollider>(true)
+					?? this.GetComponentInChildren<Collider>(true)
 				);
 				#if VERBOSE_GENERATION
 				Plugin.LogDebug($"Using first collider found: {collider}");
@@ -334,9 +338,6 @@ public class DTile : Tile {
 			}
 		}
 		if (bounds.extents == Vector3.zero && collider != null) bounds = collider.bounds;
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"{this.gameObject.name} extents: {bounds.extents}");
-		#endif
 		
 		// Special rules
 		switch (this.gameObject.name) {
@@ -351,8 +352,17 @@ public class DTile : Tile {
 				// Do not include the entire start room
 				// (makes bounds at bottom of elevator stick out way too far)
 				bounds = new Bounds(new Vector3(3.4f,20f,3.4f), new Vector3(6.8f,60f,6.8f));
+			break; default:
+				if (bounds.extents == Vector3.zero) {
+					Plugin.LogError($"Tile {this} has zero bounds");
+				}
 			break;
+			
 		}
+		
+		#if VERBOSE_GENERATION
+		Plugin.LogDebug($"{this.gameObject.name} extents: {bounds.extents}");
+		#endif
 		
 		return bounds;
 	}
@@ -430,13 +440,14 @@ public class DGameMap : GameMap {
 	protected Dictionary<int, PropSet> globalPropSets;
 	protected Dictionary<int, PropSet> uninitializedGlobalPropSets;
 	
+	public Moon Moon {get {return this.transform.parent.GetComponent<Moon>();}}
 	public IReadOnlyCollection<PropSet> GlobalPropSets {get {return globalPropSets.Values;}}
 	
 	// Constructors/Initialization
 	protected override void Awake() {
 		base.Awake();
 		
-		this.transform.position -= Vector3.up * 200f;
+		this.transform.position = new Vector3(0,-200,0);
 		
 		this.GenerationCompleteEvent += DGameMap.GenerationCompleteHandler;
 		this.TileInsertionEvent += DGameMap.TileInsertionFail;
@@ -514,18 +525,12 @@ public class DGameMap : GameMap {
 			obj.Restore();
 		}
 	}
-
-	public void DestroyAllScrap() {
-		foreach (Scrap s in this.GetComponentsInChildren<Scrap>(includeInactive:true)) {
-			GameObject.Destroy(s.gameObject);
-		}
-	}
 	
 	public void InitializeLoadedMapObjects() {
-		foreach (MapObject s in this.GetComponentsInChildren<MapObject>(includeInactive: true)) {
+		foreach (MapObject s in this.GetComponentsInChildren<MapObject>()) {
 			var netObj = s.GetComponent<NetworkObject>();
 			if (!netObj.IsSpawned) netObj.Spawn();
-			s.FindParent(this);
+			s.FindParent(map: this);
 		}
 	}
 	
@@ -1006,35 +1011,32 @@ public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerial
 		}
 	}
 	
-	public override void Serialize(SerializationContext sc, object o) {
-		base.Serialize(sc,o);
-		DGameMap tgt = (DGameMap)o;
+	public override void Serialize(SerializationContext sc, DGameMap tgt) {
+		base.Serialize(sc,tgt);
 		
 		SerializeMapObjects<Scrap>(sc,tgt,new ScrapSerializer());
 		SerializeMapObjects<Equipment>(sc,tgt,new EquipmentSerializer());
 	}
 	
+	// extraContext is a DTileSerializer or null for a new instance
 	protected override DGameMap Deserialize(
 		DGameMap rt, DeserializationContext dc, object extraContext=null
 	) {
 		base.Deserialize(rt,dc,extraContext);
-		
 		DeserializeMapObjects<Scrap, ScrapSerializer>(rt,dc);
 		DeserializeMapObjects<Equipment, EquipmentSerializer>(rt,dc);
 		
 		return rt;
 	}
 	
-	public override void Finalize(object x) {
-		DGameMap map = (DGameMap)x;
+	public override void Finalize(DGameMap map) {
 		map.InitializeLoadedMapObjects();
 		map.gameObject.SetActive(false);
 	}
 }
 
 public class DTileSerializer : TileSerializer<DTile> {
-	public override void Serialize(SerializationContext sc, object o) {
-		var tgt = (DTile)o;
+	public override void Serialize(SerializationContext sc, DTile tgt) {
 		base.Serialize(sc,tgt);
 		
 		IList<Prop> props = tgt.GetProps();
@@ -1082,8 +1084,7 @@ public class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		}
 	}
 	
-	public override void Serialize(SerializationContext sc, object o) {
-		DGameMap m = (DGameMap)o;
+	public override void Serialize(SerializationContext sc, DGameMap m) {
 		sc.Add(m.name+"\0");
 		
 		SerializeMapObjects<Scrap>(sc, m, new ScrapNetworkSerializer());
@@ -1108,7 +1109,7 @@ public class DGameMapNetworkSerializer : Serializer<DGameMap> {
 	}
 	
 	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc, object extraContext=null) {
-		DeserializeMapObjects<Scrap>(map, dc, new ScrapNetworkSerializer());
+		DeserializeMapObjects<Scrap    >(map, dc, new ScrapNetworkSerializer());
 		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer());
 		
 		return map;
@@ -1117,7 +1118,9 @@ public class DGameMapNetworkSerializer : Serializer<DGameMap> {
 	public override DGameMap Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
 		dc.Consume(1);
-		DGameMap map = MapHandler.Instance.transform.Find(id).GetComponent<DGameMap>();
+		
+		Moon moon = (Moon)extraContext; 
+		DGameMap map = moon.transform.Find(id).GetComponent<DGameMap>();
 		return Deserialize(map,dc,extraContext);
 	}
 }

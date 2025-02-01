@@ -17,20 +17,26 @@ public interface ISerializer<out T> {
 	public void Finalize(object obj);
 }
 
+// If you see an error thrown from a cast in this class, it means you used the wrong serializer on something!
 public abstract class Serializer<T> : ISerializer<T> {
-	public abstract void Serialize(SerializationContext sc, object tgt);
+	public void Serialize(SerializationContext sc, object tgt) {Serialize(sc,(T)tgt);}
+	
+	public abstract void Serialize(SerializationContext sc, T tgt);
+	
+	// ISerializer.Deserialize
+	// Intended to instantiate some kind of prefab or default object, and initialize it with above
+	// Not intended to be used by inheritors, just for DeserializationContext
 	public abstract T Deserialize(DeserializationContext dc, object extraContext=null);
 	
 	// The bulk of deserialization should occur here
 	protected abstract T Deserialize(T baseObject, DeserializationContext dc, object extraContext=null);
 	
-	// ISerializer.Deserialize
-	// Intended to instantiate some kind of prefab or default object, and initialize it with above
-	// Not intended to be used by inheritors, just for DeserializationContext
 	
 	// ISerializer.Finalize
 	// Called when deserialization is completely finished
-	public virtual void Finalize(object obj) {}
+	public void Finalize(object obj) {this.Finalize((T)obj);}
+	
+	public virtual void Finalize(T obj) {}
 }
 
 public sealed class SerializationContext {
@@ -172,6 +178,8 @@ internal class ReferenceInfo {
 
 // Relies on the assumption that data before an object will identify it
 // i.e. we will know what an object should be before we come across it in the bytestream
+// Finalizers are called in reverse-order of when an object appears in the file
+// i.e. the first thing deserialized will be the last thing that has its finalizer called
 public sealed class DeserializationContext {
 	private byte[] data;
 	
@@ -210,16 +218,19 @@ public sealed class DeserializationContext {
 		
 		foreach ((var obj, var action) in this.finalizers) {
 			try {
-				action?.Invoke(obj);
+				#if VERBOSE_DESERIALIZE
+				Plugin.LogDebug($"Calling finalizer for {obj}");
+				#endif
+				action.Invoke(obj);
 			} catch (Exception e) {
-				Plugin.LogError($"Deserialization finalizer threw an exception: \n{e.Message}");
+				Plugin.LogError($"Deserialization finalizer threw an exception: \n{e}");
+				throw;
 			}
 		}
-		// while (address != data.Length) Consume(1);
 		
-		this.references = new();
-		this.finalizers = new();
-		this.unresolvedReferences = new();
+		this.references.Clear();
+		this.finalizers.Clear();
+		this.unresolvedReferences.Clear();
 		this.address = 1;
 		return rt;
 	}
