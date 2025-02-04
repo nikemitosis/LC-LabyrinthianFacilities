@@ -1036,16 +1036,24 @@ public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerial
 }
 
 public class DTileSerializer : TileSerializer<DTile> {
+	
 	public override void Serialize(SerializationContext sc, DTile tgt) {
 		base.Serialize(sc,tgt);
 		
 		IList<Prop> props = tgt.GetProps();
-		sc.Add((ushort)props.Count);
 		#if VERBOSE_SERIALIZE
 		Plugin.LogDebug($"Found {props.Count} props");
 		#endif
-		foreach (Prop prop in props) {
-			sc.Add(prop.gameObject.activeSelf);
+		sc.Add((ushort)props.Count);
+		
+		ulong total = sc.AddBools<Prop>(
+			props,
+			(Prop p) => p.gameObject.activeSelf
+		);
+		if (total != (ulong)props.Count) {
+			throw new Exception(
+				$"Iterating over props had != props.Count iterations! ({total} != {props.Count})"
+			);
 		}
 	}
 	
@@ -1063,11 +1071,20 @@ public class DTileSerializer : TileSerializer<DTile> {
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"Found {propCount} props");
 		#endif
+		
 		IList<Prop> props = tile.GetProps();
-		for (ushort i=0; i<propCount; i++) {
-			dc.Consume(1).CastInto(out bool flag);
-			props[i].SetActive(flag);
+		if (propCount != props.Count) {
+			throw new Exception(
+				 $"The amount of props stored in file for {tile.name} is not the same as "
+				+$"the number of props the tile actually has. ({propCount} != {props.Count})"
+			);
 		}
+		
+		int i=0;
+		foreach (bool flag in dc.ConsumeBools(propCount)) {
+			props[i++].SetActive(flag);
+		}
+		
 		return tile;
 	}
 }

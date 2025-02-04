@@ -78,6 +78,9 @@ public sealed class SerializationContext {
 		return Output;
 	}
 	
+	public void Add(byte i) {
+		output.Add(i);
+	}
 	public void Add(IEnumerable<byte> bytes) {
 		output.AddRange(bytes);
 	}
@@ -88,6 +91,29 @@ public sealed class SerializationContext {
 	public void Add(float  i) {Add(i.GetBytes());}
 	public void Add(string i) {Add(i.GetBytes());}
 	
+	public ulong AddBools<T>(IEnumerable<T> items, Func<T,bool> transformer) {
+		byte packer = 0;
+		byte packerProgress = 0;
+		ulong total = 0;
+		foreach (T t in items) {
+			//  first bool is in first byte, LSB
+			// eighth bool is in first byte, MSB
+			if (transformer(t)) packer |= (byte)(1 << packerProgress);
+			packerProgress++;
+			total++;
+			
+			if (packerProgress == 8) {
+				this.Add(packer);
+				packer = 0;
+				packerProgress = 0;
+			}
+		}
+		if (packerProgress != 0) {
+			this.Add(packer);
+		}
+		
+		return total;
+	}
 	
 	public void AddInline(object tgt, ISerializer<object> ser) {
 		#if VERBOSE_SERIALIZE
@@ -249,6 +275,17 @@ public sealed class DeserializationContext {
 			length++;
 		}
 		return this.Consume(length);
+	}
+	
+	public IEnumerable<bool> ConsumeBools(ulong count) {
+		byte curByte = 0;
+		for (ulong i=0; i<count; i++) {
+			if (i % 8 == 0) {
+				curByte = this.Consume(1)[0];
+			}
+			yield return (curByte & 0x01) != 0;
+			curByte >>= 1;
+		}
 	}
 	
 	// Consumes 4 bytes, and queues resolving of the reference if occurs later in the bytestream, otherwise

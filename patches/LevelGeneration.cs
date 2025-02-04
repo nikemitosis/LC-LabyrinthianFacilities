@@ -121,7 +121,7 @@ public class RespawnBeesPatch {
 	[HarmonyPrefix]
 	public static bool DontSpawnNewHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
 		try {
-			var flag = __instance.GetComponent<Beehive.DummyFlag>();
+			var flag = __instance.GetComponent<DummyFlag>();
 			if (flag == null) return true;
 			MonoBehaviour.Destroy(flag);
 			

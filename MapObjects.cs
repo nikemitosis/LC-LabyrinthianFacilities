@@ -17,8 +17,8 @@ public class MapObject : MonoBehaviour {
 		return this.GetComponent<GrabbableObject>();
 	}}
 	
-	public Transform FindParent(DGameMap map=null, Moon moon=null, bool? includeInactive=null) {
-		moon ??= map?.Moon ?? MapHandler.Instance.ActiveMoon;
+	public Transform FindParent(DGameMap map=null) {
+		Moon moon = map?.Moon ?? MapHandler.Instance.ActiveMoon;
 		map ??= moon?.ActiveMap;
 		if (map == null) {
 			if (moon != null) {
@@ -31,15 +31,13 @@ public class MapObject : MonoBehaviour {
 		
 		bool noparentfound = true;
 		foreach (Tile t in map.GetComponentsInChildren<Tile>(
-			includeInactive ?? map.gameObject.activeInHierarchy
+			map.gameObject.activeInHierarchy
 		)) {
 			if (t.BoundingBox.Contains(this.transform.position)) {
 				this.transform.parent = t.transform;
 				noparentfound = false; break;
 			}
 		} if (noparentfound) {
-			Plugin.LogFatal($"No tile parent found for {this.name} @ {this.transform.position}");
-			Plugin.LogFatal($"(map @ {map.transform.position})");
 			this.transform.parent = moon.transform;
 		}
 		this.Grabbable.targetFloorPosition 
@@ -57,7 +55,7 @@ public class MapObject : MonoBehaviour {
 		
 		if (
 			!grabbable.isInShipRoom
-			&& this.transform.parent?.GetComponent<VehicleController>() == null // exclude things on cruiser
+			&& this.transform.parent?.GetComponent<Cruiser>() == null // exclude things on cruiser
 		) {
 			this.FindParent();
 			this.gameObject.SetActive(false);
@@ -68,7 +66,6 @@ public class MapObject : MonoBehaviour {
 	public virtual void Restore() {
 		this.gameObject.SetActive(true);
 	}
-	
 	
 }
 
@@ -83,7 +80,7 @@ public class Scrap : MapObject {
 	}
 	
 	protected virtual void OnDestroy() {
-		GameObject.Destroy(this.Grabbable.radarIcon?.gameObject);
+		if (this.Grabbable.radarIcon != null) GameObject.Destroy(this.Grabbable.radarIcon.gameObject);
 	}
 	
 	public override void Preserve() {
@@ -107,15 +104,15 @@ public class Scrap : MapObject {
 	}
 }
 
+// The purpose of this is to mark an object that is being spawned by the mod, and should not use the 
+// normal initialization
+internal class DummyFlag : MonoBehaviour {}
+
 public class Beehive : Scrap {
 	
 	private bool IsServer {
 		get {return NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer;}
 	}
-	
-	// The sole purpose of this is to mark a bee swarm that is intended to be paired with an 
-	// already-existing hive. 
-	public class DummyFlag : MonoBehaviour {}
 	
 	public struct BeeInfo {
 		public Vector3 position;
@@ -148,7 +145,7 @@ public class Beehive : Scrap {
 	}
 	
 	protected virtual void OnEnable() {
-		if (this.GetComponentInParent<GameMap>() != null) {
+		if (this.GetComponentInParent<Moon>() != null) {
 			this.bees = SpawnBees();
 		}
 	}
@@ -229,6 +226,85 @@ public class Equipment : MapObject {
 	}
 }
 
+// Bypassing Netcode's requirement that NetworkObjects must be parented under other NetworkObjects
+// Yes this is bad practice! 
+// (I didn't want moons to be server-managed just to take advantage of unity's parenting)
+public class Cruiser : NetworkBehaviour {
+	
+	public Moon Moon {get => this.transform.parent.GetComponent<Moon>();}
+	
+	private static GameObject prefab = null;
+	public GameObject Prefab {get {
+		if (Cruiser.prefab == null) {
+			foreach (Cruiser vc in Resources.FindObjectsOfTypeAll<Cruiser>()) {
+				if (vc.name == "CompanyCruiser") {
+					Cruiser.prefab = vc.gameObject;
+					break;
+				}
+			}
+		}
+		return Cruiser.prefab;
+	}}
+	
+	public void Preserve() {
+		var vc = this.GetComponent<VehicleController>();
+		if (vc.magnetedToShip  ||  vc.carDestroyed && vc.GetComponentsInChildren<MapObject>().Length == 0) {
+			this.transform.parent = null;
+			return;
+		}
+		foreach (MapObject mo in this.GetComponentsInChildren<MapObject>()) {
+			mo.gameObject.SetActive(false);
+		}
+		SetMoon(MapHandler.Instance.ActiveMoon);
+		this.gameObject.SetActive(false);
+	}
+	
+	public void Restore() {
+		if (NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer) {
+			GameObject    gameObj = GameObject.Instantiate(Prefab);
+			NetworkObject netObj  = gameObj.GetComponent<NetworkObject>();
+			
+			gameObj.transform.position = this.transform.position;
+			gameObj.transform.rotation = this.transform.rotation;
+			
+			netObj.Spawn();
+			RestoreClientRpc(this.NetworkObjectId, netObj.NetworkObjectId);
+		}
+	}
+	
+	[ClientRpc]
+	public void RestoreClientRpc(ulong oldId, ulong newId) {
+		NetworkObject older = NetworkManager.Singleton.SpawnManager.SpawnedObjects[oldId];
+		NetworkObject newer = NetworkManager.Singleton.SpawnManager.SpawnedObjects[newId];
+		
+		// Why does this cause a softlock?
+		// Something with reparenting, but why does StopIgnition being disabled matter?
+		// newer.GetComponent<Cruiser>().SetMoon(older.GetComponent<Cruiser>().Moon);
+		
+		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
+			mo.transform.parent = newer.transform;
+			mo.gameObject.SetActive(true);
+		}
+		
+		older.GetComponent<Cruiser>().DoneWithOldCruiserServerRpc();
+	}
+	
+	private int numFinished = 0;
+	[ServerRpc(RequireOwnership=false)]
+	public void DoneWithOldCruiserServerRpc(bool disconnect=false) {
+		if (!disconnect) numFinished++;
+		if (numFinished == StartOfRound.Instance.connectedPlayersAmount) {
+			this.GetComponent<NetworkObject>().Despawn(true);
+		}
+	}
+	
+	public void SetMoon(Moon moon) {
+		// SHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUP
+		this.GetComponent<NetworkObject>().AutoObjectParentSync = false;
+		this.transform.parent = moon.transform;
+	}
+}
+
 // extraContext is GameMap that this is parented to
 public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
@@ -250,8 +326,8 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
-		if (rt == null) return null;
 		
+		if (rt == null) return null;
 		rt.transform.position = new Vector3(x,y,z);
 		
 		if (extraContext is Moon moon) {
@@ -328,7 +404,9 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 		if (extraContext is DGameMap map) {
 			s.FindParent(map: map);
 		} else if (extraContext is Moon moon) {
-			s.FindParent(moon: moon);
+			s.transform.parent = moon.transform;
+		} else if (extraContext is Cruiser cruiser) {
+			s.transform.parent = cruiser.transform;
 		} else {
 			try {s.FindParent();} catch (NullReferenceException) {
 				throw new NullReferenceException("No moon/map provided to network-deserialized MapObject");
@@ -367,3 +445,158 @@ public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
 }
 
 public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> {}
+
+// This will break with other vehicles, either modded or added into the game 
+// or at least they will if they use Cruiser
+public class CruiserSerializer : Serializer<Cruiser> {
+	
+	private static GameObject prefab = null;
+	
+	/* Format:
+	 *   float x,y,z
+	 *   Quaternion x,y,z,w
+	 *   Scrap[] scrap
+	 *   Equipment[] equipment
+	*/
+	public override void Serialize(SerializationContext sc, Cruiser cruiser) {
+		sc.Add(cruiser.transform.position.x);
+		sc.Add(cruiser.transform.position.y);
+		sc.Add(cruiser.transform.position.z);
+		
+		sc.Add(cruiser.transform.rotation.x);
+		sc.Add(cruiser.transform.rotation.y);
+		sc.Add(cruiser.transform.rotation.z);
+		sc.Add(cruiser.transform.rotation.w);
+		
+		Scrap[] scrap = cruiser.GetComponentsInChildren<Scrap>(true);
+		ScrapSerializer scrapSer = new ScrapSerializer();
+		sc.Add((ushort)scrap.Length);
+		foreach (Scrap s in scrap) {
+			sc.AddInline(s,scrapSer);
+		}
+		
+		Equipment[] equipment = cruiser.GetComponentsInChildren<Equipment>(true);
+		EquipmentSerializer eqSer = new();
+		sc.Add((ushort)scrap.Length);
+		foreach (Equipment eq in equipment) {
+			sc.AddInline(eq,eqSer);
+		}
+	}
+	
+	// extraContext is Moon
+	protected override Cruiser Deserialize(
+		Cruiser cruiser, DeserializationContext dc, object extraContext=null
+	) {
+		// Cruiser is null for clients! (deliberate, clients cannot control network objects)
+		
+		var moon = (Moon)extraContext;
+		
+		dc.Consume(4).CastInto(out float x);
+		dc.Consume(4).CastInto(out float y);
+		dc.Consume(4).CastInto(out float z);
+		Vector3 pos = new Vector3(x,y,z);
+		
+		dc.Consume(4).CastInto(out x);
+		dc.Consume(4).CastInto(out y);
+		dc.Consume(4).CastInto(out z);
+		dc.Consume(4).CastInto(out float w);
+		Quaternion rot = new Quaternion(x,y,z,w);
+		
+		if (cruiser != null) {
+			cruiser.transform.parent = moon.transform;
+			cruiser.transform.position = pos;
+			cruiser.transform.rotation = rot;
+		}
+		
+		dc.Consume(2).CastInto(out ushort count);
+		var scrapSer = new ScrapSerializer();
+		for (ushort i=0; i<count; i++) {
+			dc.ConsumeInline(scrapSer,cruiser);
+		}
+		
+		dc.Consume(2).CastInto(out count);
+		var eqSer = new EquipmentSerializer();
+		for (ushort i=0; i<count; i++) {
+			dc.ConsumeInline(eqSer,cruiser);
+		}
+		
+		return cruiser;
+	}
+	
+	// extraContext is Moon
+	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
+		Cruiser rt = null;
+		if (NetworkManager.Singleton.IsServer || NetworkManager.Singleton.IsHost) {
+			if (prefab == null) {
+				foreach (Cruiser vc in Resources.FindObjectsOfTypeAll<Cruiser>()) {
+					if (vc.name == "CompanyCruiser") {
+						prefab = vc.gameObject;
+						break;
+					}
+				}
+			}
+			var g = GameObject.Instantiate(prefab);
+			g.AddComponent<DummyFlag>();
+			g.GetComponent<NetworkObject>().Spawn();
+			rt = g.GetComponent<Cruiser>();
+		}
+		return Deserialize(rt,dc,extraContext);
+	}
+}
+
+public class CruiserNetworkSerializer : Serializer<Cruiser> {
+	public override void Serialize(SerializationContext sc, Cruiser tgt) {
+		var netobj = tgt.GetComponent<NetworkObject>();
+		if (netobj == null || !netobj.IsSpawned) {
+			throw new ArgumentException(
+				$"Cannot use {this.GetType()} to serialize {tgt} that is not spawned. "
+			);
+		}
+		sc.Add(netobj.NetworkObjectId);
+		
+		Scrap[] scrap = tgt.GetComponentsInChildren<Scrap>();
+		sc.Add((ushort)scrap.Length);
+		var scrapSerializer = new ScrapNetworkSerializer();
+		foreach (Scrap s in scrap) {
+			sc.AddInline(s,scrapSerializer);
+		}
+		
+		Equipment[] equipment = tgt.GetComponentsInChildren<Equipment>();
+		sc.Add((ushort)equipment.Length);
+		var eqSerializer = new EquipmentNetworkSerializer();
+		foreach (Equipment eq in equipment) {
+			sc.AddInline(eq,eqSerializer);
+		}
+	}
+	
+	protected override Cruiser Deserialize(
+		Cruiser tgt, DeserializationContext dc, object extraContext=null
+	) {
+		Moon moon = (Moon)extraContext;
+		
+		tgt.transform.parent = moon.transform;
+		
+		dc.Consume(2).CastInto(out ushort numScrap);
+		var scrapSerializer = new ScrapNetworkSerializer();
+		for (ushort i=0; i<numScrap; i++) {
+			dc.ConsumeInline(scrapSerializer,tgt);
+		}
+		
+		dc.Consume(2).CastInto(out ushort numEquipment);
+		var equipmentSerializer = new EquipmentNetworkSerializer();
+		for (ushort i=0; i<numEquipment; i++) {
+			dc.ConsumeInline(equipmentSerializer,tgt);
+		}
+		
+		return tgt;
+	}
+	
+	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
+		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
+		return Deserialize(
+			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<Cruiser>(),
+			dc,
+			extraContext
+		);
+	}
+}

@@ -23,6 +23,7 @@ using DunGen.Graph;
 
 // UnityEngine + System ambiguity
 using Random = System.Random;
+using Object = UnityEngine.Object;
 
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
 public class Plugin : BaseUnityPlugin {
@@ -77,7 +78,7 @@ public class Plugin : BaseUnityPlugin {
 		LogInfo($"Plugin {Plugin.GUID} is Awoken!");
 	}
 	
-	public static void LogDebug(string message) {
+	public static void LogDebug  (string message) {
 		if (MIN_LOG > 0) return;
 		if (PROMOTE_LOG > 0) {
 			LogInfo(message);
@@ -85,7 +86,7 @@ public class Plugin : BaseUnityPlugin {
 		}
 		Logger.LogDebug(message);
 	}
-	public static void LogInfo(string message) {
+	public static void LogInfo   (string message) {
 		if (MIN_LOG > 1) return;
 		if (PROMOTE_LOG > 1) {
 			LogMessage(message);
@@ -109,7 +110,7 @@ public class Plugin : BaseUnityPlugin {
 		}
 		Logger.LogWarning(message);
 	}
-	public static void LogError(string message) {
+	public static void LogError  (string message) {
 		if (MIN_LOG > 4) return;
 		if (PROMOTE_LOG > 4) {
 			LogFatal(message);
@@ -117,7 +118,7 @@ public class Plugin : BaseUnityPlugin {
 		}
 		Logger.LogError(message);
 	}
-	public static void LogFatal(string message) {
+	public static void LogFatal  (string message) {
 		if (MIN_LOG > 5 || PROMOTE_LOG > 5) return;
 		Logger.LogFatal(message);
 	}
@@ -126,7 +127,7 @@ public class Plugin : BaseUnityPlugin {
 		if (initializedAssets) return;
 		initializedAssets = true;
 		
-		Plugin.LogInfo($"Creating Tiles");
+		Plugin.LogInfo($"Initializing Tiles");
 		foreach (DunGen.Tile tile in Resources.FindObjectsOfTypeAll(typeof(DunGen.Tile))) {
 			// Surely there's a better way to fix +z being the vertical axis on these tiles...
 			switch (tile.gameObject.name) {
@@ -152,17 +153,17 @@ public class Plugin : BaseUnityPlugin {
 			tile.gameObject.AddComponent<DTile>();
 		}
 		
-		Plugin.LogInfo("Creating Doorways");
+		Plugin.LogInfo("Initializing Doorways");
 		foreach (DunGen.Doorway doorway in Resources.FindObjectsOfTypeAll(typeof(DunGen.Doorway))) {
 			doorway.gameObject.AddComponent<DDoorway>();
 		}
 		
-		Plugin.LogInfo("Creating Scrap & Equipment");
+		Plugin.LogInfo("Initializing Scrap & Equipment");
 		foreach (GrabbableObject grabbable in Resources.FindObjectsOfTypeAll(typeof(GrabbableObject))) {
-			// exclude corpses & clipboards?
+			// exclude corpses & clipboards
 			if (
 				grabbable.GetType() == typeof(RagdollGrabbableObject)
-				// || grabbable.GetType() == typeof(ClipboardItem)
+				|| grabbable.GetType() == typeof(ClipboardItem)
 			) continue;
 			
 			if (grabbable.itemProperties.isScrap) {
@@ -176,6 +177,18 @@ public class Plugin : BaseUnityPlugin {
 				grabbable.GetComponent<EnemyAI>() == null 
 			) {
 				grabbable.gameObject.AddComponent<Equipment>();
+			}
+		}
+	
+		Plugin.LogInfo("Initializing Company Cruiser");
+		foreach (VehicleController vc in Resources.FindObjectsOfTypeAll(typeof(VehicleController))) {
+			if (vc.name == "CompanyCruiser") {
+				vc.gameObject.AddComponent<Cruiser>();
+				break;
+			} else {
+				Plugin.LogWarning(
+					$"Did not recognize vehicle '{vc.name}'. This vehicle will be ignored by {Plugin.NAME}"
+				);
 			}
 		}
 	}
@@ -211,8 +224,16 @@ public class MapHandler : NetworkBehaviour {
 	
 	public static void OnDisconnect(bool isHost) {
 		Plugin.LogInfo($"Disconnecting: Destroying local instance of MapHandler");
+		
+		// Dont need to include cruisers not parented to MapHandler because they are in active play, 
+		// and not being despawned
+		foreach (Cruiser cruiser in MapHandler.Instance.GetComponentsInChildren<Cruiser>(true)) {
+			cruiser.DoneWithOldCruiserServerRpc(disconnect: true);
+		}
+		
 		Instance.NetworkManager.OnClientStopped -= MapHandler.OnDisconnect;
 		Instance.OnNetworkDespawn();
+		
 	}
 	
 	public Moon GetMoon(SelectableLevel level) {
@@ -281,7 +302,7 @@ public class MapHandler : NetworkBehaviour {
 	
 	public void SaveGame() {
 		if (!(base.IsServer || base.IsHost)) return;
-		Plugin.LogInfo("Saving maps!");
+		Plugin.LogInfo("Saving moons!");
 		try {
 			Directory.CreateDirectory(SaveManager.ModSaveDirectory);
 		} catch (IOException) {
@@ -437,6 +458,10 @@ public class Moon : MonoBehaviour {
 		map.transform.parent = this.transform;
 	}
 	
+	public void LoadCruiser(Cruiser cruiser) {
+		cruiser.SetMoon(this);
+	}
+	
 	public IEnumerator Generate(
 		DungeonFlowConverter tilegen, 
 		Action<GameMap> onComplete=null
@@ -458,15 +483,23 @@ public class Moon : MonoBehaviour {
 	public void PreserveMapObjects() {
 		Plugin.LogInfo("Hiding Map Objects!");
 		this.ActiveMap?.PreserveMapObjects();
+		
+		foreach (var cruiser in Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None)) {
+			cruiser.Preserve();
+		}
 	}
 	
 	public void RestoreMapObjects() {
 		foreach (Transform child in this.transform) {
-			var mapObj = child.GetComponent<MapObject>();
+			MapObject mapObj = child.GetComponent<MapObject>();
 			if (mapObj != null) {
 				mapObj.Restore();
+			} else {
+				var cruiser = child.GetComponent<Cruiser>();
+				if (cruiser != null) cruiser.Restore();
 			}
 		}
+		this.ActiveMap.RestoreMapObjects();
 	}
 }
 
@@ -671,6 +704,14 @@ public class MoonSerializer : Serializer<Moon> {
 		SerializeMapObjects<Scrap>(sc,moon,new ScrapSerializer());
 		SerializeMapObjects<Equipment>(sc,moon,new EquipmentSerializer());
 		
+		// Serialize cruisers
+		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
+		sc.Add((ushort)cruisers.Length);
+		var cruiserSerializer = new CruiserSerializer();
+		foreach (Cruiser cruiser in cruisers) {
+			sc.AddInline(cruiser,cruiserSerializer);
+		}
+		
 		// Serialize maps
 		DGameMap[] maps = moon.GetComponentsInChildren<DGameMap>(true);
 		sc.Add((ushort)maps.Length);
@@ -701,6 +742,12 @@ public class MoonSerializer : Serializer<Moon> {
 		
 		DeserializeMapObjects<Scrap    >(moon,dc,new ScrapSerializer());
 		DeserializeMapObjects<Equipment>(moon,dc,new EquipmentSerializer());
+		
+		dc.Consume(2).CastInto(out ushort numCruisers);
+		var cruiserSerializer = new CruiserSerializer();
+		for (int i=0; i<numCruisers; i++) {
+			dc.ConsumeInline(cruiserSerializer,moon);
+		}
 		
 		dc.Consume(2).CastInto(out ushort numMaps);
 		var ser = new DGameMapSerializer();
@@ -741,6 +788,11 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	
 	public override void Serialize(SerializationContext sc, Moon moon) {
 		sc.Add(moon.name+"\0");
+		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>();
+		var ser = new CruiserNetworkSerializer();
+		foreach (var cruiser in cruisers) {
+			sc.AddInline(cruiser, ser);
+		}
 		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer());
 		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer());
 	}
@@ -763,9 +815,18 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	}
 	
 	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+		// Cruisers
+		dc.Consume(2).CastInto(out ushort numCruisers);
+		var cruiserSerializer = new CruiserNetworkSerializer();
+		for (ushort i=0; i<numCruisers; i++) {
+			dc.ConsumeInline(cruiserSerializer, moon);
+		}
+		
+		// MapObjects
 		DeserializeMapObjects<Scrap    >(moon, dc, new ScrapNetworkSerializer());
 		DeserializeMapObjects<Equipment>(moon, dc, new EquipmentNetworkSerializer());
 		
+		// DGameMaps
 		dc.Consume(2).CastInto(out ushort numMaps);
 		var ds = new DGameMapNetworkSerializer();
 		for (ushort i=0; i<numMaps; i++) {

@@ -6,6 +6,8 @@ using UnityEngine;
 
 using HarmonyLib;
 
+using Object=UnityEngine.Object;
+
 [HarmonyPatch(typeof(GameNetworkManager))]
 class SaveMapsPatch {
 	[HarmonyPatch("SaveGame")]
@@ -66,5 +68,28 @@ class ModifyFilePatch {
 			Plugin.LogError($"{e}");
 			throw;
 		}
+	}
+}
+
+[HarmonyPatch(typeof(VehicleController))]
+public class CruiserLoadPatch {
+	private static bool OldState;
+	[HarmonyPatch("Start")]
+	[HarmonyPrefix]
+	public static void DontMagnetMoonCruisers(VehicleController __instance) {
+		if (__instance.GetComponent<DummyFlag>() == null) return;
+		
+		OldState = StartOfRound.Instance.inShipPhase;
+		StartOfRound.Instance.inShipPhase = false;
+	}
+	
+	[HarmonyPatch("Start")]
+	[HarmonyPostfix]
+	public static void RestoreInShipPhase(VehicleController __instance) {
+		DummyFlag flag = __instance.GetComponent<DummyFlag>();
+		if (flag == null) return;
+		
+		Object.Destroy(flag);
+		StartOfRound.Instance.inShipPhase = OldState;
 	}
 }

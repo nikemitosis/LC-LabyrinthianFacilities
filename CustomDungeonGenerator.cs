@@ -366,7 +366,6 @@ public class GameMap : MonoBehaviour {
 			this.RemoveTile(removal);
 		} else if (action is ConnectAction connection)  {
 			(Doorway d1, Doorway d2) = connection.Doorways;
-			// this.RemoveLeaf(d1); this.RemoveLeaf(d2);
 			this.extraConnections.Add(d1,d2);
 			d1.Connect(d2);
 		} else if (action is DisconnectAction dc) {
