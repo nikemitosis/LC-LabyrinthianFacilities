@@ -1,4 +1,4 @@
-﻿// ^(\[.{7}:((LabyrinthianFacilities)|( Unity Log))\] .*$)
+// ^(\[.{7}:((LabyrinthianFacilities)|( Unity Log))\] .*$)
 // (Logging regex)
 namespace LabyrinthianFacilities;
 
@@ -184,7 +184,9 @@ public class Plugin : BaseUnityPlugin {
 		foreach (VehicleController vc in Resources.FindObjectsOfTypeAll(typeof(VehicleController))) {
 			if (vc.name == "CompanyCruiser") {
 				vc.gameObject.AddComponent<Cruiser>();
-				break;
+			} else if (vc.name == "CompanyCruiser(Clone)") { // Clients already loaded spawned NetworkObjects
+				vc.gameObject.AddComponent<Cruiser>();
+				vc.gameObject.AddComponent<DummyFlag>();
 			} else {
 				Plugin.LogWarning(
 					$"Did not recognize vehicle '{vc.name}'. This vehicle will be ignored by {Plugin.NAME}"
@@ -210,12 +212,19 @@ public class MapHandler : NetworkBehaviour {
 			this.GetComponent<NetworkObject>().Despawn(true);
 			return;
 		}
-		Plugin.InitializeAssets();
 		Instance = this;
+		
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
 		moons = new();
 		unresolvedMoons = new();
-		LoadGame();
+		Plugin.InitializeAssets();
+		
+		if (this.IsHost || this.IsServer) {
+			LoadGame();
+		} else {
+			MapHandler.Instance.RequestMapDataServerRpc(NetworkManager.Singleton.LocalClientId);
+		}
+		
 	}
 	public override void OnNetworkDespawn() {
 		MapHandler.Instance = null;
@@ -349,7 +358,8 @@ public class MapHandler : NetworkBehaviour {
 		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
 	}
 	
-	public void SendMapDataToClient(ulong clientId) {
+	[ServerRpc(RequireOwnership=false)]
+	public void RequestMapDataServerRpc(ulong clientId) {
 		if (!(base.IsServer || base.IsHost)) return;
 		Plugin.LogInfo($"Sending map data to client #{clientId}!");
 		var cparams = new ClientRpcParams {
@@ -635,12 +645,12 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 			Plugin.LogError($"Deserialzed instance is not MapHandler singleton!");
 			((MapHandler)baseObj).GetComponent<NetworkObject>().Despawn(true);
 		}
-		dc.Consume(2).CastInto(out ushort numMaps);
+		dc.Consume(2).CastInto(out ushort numMoons);
 		
 		// Captures for lambda
 		var rt = MapHandler.Instance;
 		var moonDeserializer = new MoonSerializer();
-		for (int i=0; i<numMaps; i++) {
+		for (int i=0; i<numMoons; i++) {
 			rt.LoadMoon((Moon)dc.ConsumeInline(moonDeserializer));
 		}
 		
@@ -670,7 +680,7 @@ public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numMoons);
 		var ds = new MoonNetworkSerializer();
 		for (ushort i=0; i<numMoons; i++) {
-			tgt.LoadMoon((Moon)dc.ConsumeInline(ds));
+			dc.ConsumeInline(ds);
 		}
 		return tgt;
 	}
@@ -767,6 +777,10 @@ public class MoonSerializer : Serializer<Moon> {
 		Moon rt = new GameObject(id).AddComponent<Moon>();
 		return Deserialize(rt, dc, extraContext);
 	}
+	
+	public override void Finalize(Moon moon) {
+		moon.gameObject.SetActive(false);
+	}
 }
 
 public class MoonNetworkSerializer : Serializer<Moon> {
@@ -788,13 +802,26 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	
 	public override void Serialize(SerializationContext sc, Moon moon) {
 		sc.Add(moon.name+"\0");
-		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>();
+		
+		// MapObjects
+		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer());
+		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer());
+		
+		// Cruisers
+		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
 		var ser = new CruiserNetworkSerializer();
+		sc.Add((ushort)cruisers.Length);
 		foreach (var cruiser in cruisers) {
 			sc.AddInline(cruiser, ser);
 		}
-		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer());
-		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer());
+		
+		// Maps
+		var mapSer = new DGameMapNetworkSerializer();
+		DGameMap[] maps = moon.GetComponentsInChildren<DGameMap>(true);
+		sc.Add((ushort)maps.Length);
+		foreach (DGameMap map in maps) {
+			sc.AddInline(map,mapSer);
+		}
 	}
 	
 	private void DeserializeMapObjects<T>(
@@ -815,16 +842,19 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	}
 	
 	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+		// MapObjects
+		DeserializeMapObjects<Scrap    >(moon, dc, new ScrapNetworkSerializer());
+		DeserializeMapObjects<Equipment>(moon, dc, new EquipmentNetworkSerializer());
+		
 		// Cruisers
 		dc.Consume(2).CastInto(out ushort numCruisers);
+		#if VERBOSE_DESERIALIZE
+		Plugin.LogDebug($"Loading {numCruisers} cruisers for {moon.name} from address 0x{dc.Address:X}");
+		#endif
 		var cruiserSerializer = new CruiserNetworkSerializer();
 		for (ushort i=0; i<numCruisers; i++) {
 			dc.ConsumeInline(cruiserSerializer, moon);
 		}
-		
-		// MapObjects
-		DeserializeMapObjects<Scrap    >(moon, dc, new ScrapNetworkSerializer());
-		DeserializeMapObjects<Equipment>(moon, dc, new EquipmentNetworkSerializer());
 		
 		// DGameMaps
 		dc.Consume(2).CastInto(out ushort numMaps);
@@ -842,10 +872,13 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		).CastInto(out string id);
 		dc.Consume(1); // null terminator
 		
-		return Deserialize(
-			MapHandler.Instance.transform.Find(id).GetComponent<Moon>(),
-			dc, extraContext
-		);
+		Moon moon = MapHandler.Instance.transform.Find(id).GetComponent<Moon>();
+		if (moon == null) {
+			Plugin.LogError($"Couldn't find moon '{id}'");
+			return null;
+		}
+		
+		return Deserialize(moon, dc, extraContext);
 	}
 	
 	public override void Finalize(Moon moon) {

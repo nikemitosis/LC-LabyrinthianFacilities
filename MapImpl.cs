@@ -529,7 +529,6 @@ public class DGameMap : GameMap {
 	public void InitializeLoadedMapObjects() {
 		foreach (MapObject s in this.GetComponentsInChildren<MapObject>()) {
 			var netObj = s.GetComponent<NetworkObject>();
-			if (!netObj.IsSpawned) netObj.Spawn();
 			s.FindParent(map: this);
 		}
 	}

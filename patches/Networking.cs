@@ -56,17 +56,3 @@ public class PrefabSpawner {
 		}
 	}
 }
-
-[HarmonyPatch(typeof(StartOfRound))]
-class SendMapsToClientPatch {
-	[HarmonyPatch("OnClientConnect")]
-	[HarmonyPrefix]
-	public static void SendMaps(ulong clientId) {
-		try {
-			MapHandler.Instance.SendMapDataToClient(clientId);
-		} catch (Exception e) {
-			Plugin.LogError(e.Message);
-			throw;
-		}
-	}
-}

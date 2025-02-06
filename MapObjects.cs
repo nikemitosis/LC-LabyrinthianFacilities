@@ -12,7 +12,7 @@ using Util;
 
 using Object=UnityEngine.Object;
 
-public class MapObject : MonoBehaviour {
+public class MapObject : NetworkBehaviour {
 	public GrabbableObject Grabbable {get {
 		return this.GetComponent<GrabbableObject>();
 	}}
@@ -64,6 +64,9 @@ public class MapObject : MonoBehaviour {
 	}
 	
 	public virtual void Restore() {
+		this.Grabbable.startFallingPosition = (
+			this.Grabbable.targetFloorPosition = this.transform.localPosition
+		);
 		this.gameObject.SetActive(true);
 	}
 	
@@ -79,7 +82,9 @@ public class Scrap : MapObject {
 		return null;
 	}
 	
-	protected virtual void OnDestroy() {
+	public override void OnDestroy() {
+		base.OnDestroy();
+		if (this.Grabbable == null) return;
 		if (this.Grabbable.radarIcon != null) GameObject.Destroy(this.Grabbable.radarIcon.gameObject);
 	}
 	
@@ -109,10 +114,6 @@ public class Scrap : MapObject {
 internal class DummyFlag : MonoBehaviour {}
 
 public class Beehive : Scrap {
-	
-	private bool IsServer {
-		get {return NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer;}
-	}
 	
 	public struct BeeInfo {
 		public Vector3 position;
@@ -145,8 +146,8 @@ public class Beehive : Scrap {
 	}
 	
 	protected virtual void OnEnable() {
-		if (this.GetComponentInParent<Moon>() != null) {
-			this.bees = SpawnBees();
+		if (this.IsServer && this.GetComponentInParent<Moon>() != null) {
+			SpawnBeesServerRpc();
 		}
 	}
 	
@@ -161,24 +162,33 @@ public class Beehive : Scrap {
 		}
 	}
 	
-	protected virtual RedLocustBees SpawnBees() {
-		if (!IsServer) return null;
+	[ClientRpc]
+	protected virtual void SendBeesClientRpc(NetworkObjectReference beeNetObj) {
 		
+		this.bees = ((NetworkObject)beeNetObj).GetComponent<RedLocustBees>();
+		this.bees.hive = this.Grabbable;
+		this.bees.lastKnownHivePosition = this.transform.position;
+		RoundManager.Instance.SpawnedEnemies.Add(this.bees);
+	}
+	
+	[ServerRpc]
+	protected virtual void SpawnBeesServerRpc() {
 		if (this.beeInfo.IsInvalid) {
 			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);
 		}
 		GameObject g = GameObject.Instantiate(BeesPrefab, this.beeInfo.position, Quaternion.identity);
 		
-		RedLocustBees bees = g.GetComponent<RedLocustBees>();
-		bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
+		this.bees = g.GetComponent<RedLocustBees>();
+		this.bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
 		
-		bees.hive = this.Grabbable;
-		bees.lastKnownHivePosition = this.transform.position;
-		RoundManager.Instance.SpawnedEnemies.Add(bees);
+		this.bees.hive = this.Grabbable;
+		this.bees.lastKnownHivePosition = this.transform.position;
+		RoundManager.Instance.SpawnedEnemies.Add(this.bees);
 		
 		g.AddComponent<DummyFlag>();
-		g.GetComponent<NetworkObject>().Spawn();
-		return bees;
+		NetworkObject netObj = g.GetComponent<NetworkObject>();
+		netObj.Spawn();
+		SendBeesClientRpc(netObj);
 	}
 	
 	public override void Preserve() {
@@ -227,14 +237,13 @@ public class Equipment : MapObject {
 }
 
 // Bypassing Netcode's requirement that NetworkObjects must be parented under other NetworkObjects
-// Yes this is bad practice! 
-// (I didn't want moons to be server-managed just to take advantage of unity's parenting)
+// (I didn't want moons to be server-managed just to take advantage of unity's parenting for cruisers)
 public class Cruiser : NetworkBehaviour {
 	
 	public Moon Moon {get => this.transform.parent.GetComponent<Moon>();}
 	
 	private static GameObject prefab = null;
-	public GameObject Prefab {get {
+	public static GameObject Prefab {get {
 		if (Cruiser.prefab == null) {
 			foreach (Cruiser vc in Resources.FindObjectsOfTypeAll<Cruiser>()) {
 				if (vc.name == "CompanyCruiser") {
@@ -253,7 +262,7 @@ public class Cruiser : NetworkBehaviour {
 			return;
 		}
 		foreach (MapObject mo in this.GetComponentsInChildren<MapObject>()) {
-			mo.gameObject.SetActive(false);
+			mo.Preserve();
 		}
 		SetMoon(MapHandler.Instance.ActiveMoon);
 		this.gameObject.SetActive(false);
@@ -283,7 +292,7 @@ public class Cruiser : NetworkBehaviour {
 		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
 			mo.transform.parent = newer.transform;
-			mo.gameObject.SetActive(true);
+			mo.Restore();
 		}
 		
 		older.GetComponent<Cruiser>().DoneWithOldCruiserServerRpc();
@@ -293,7 +302,8 @@ public class Cruiser : NetworkBehaviour {
 	[ServerRpc(RequireOwnership=false)]
 	public void DoneWithOldCruiserServerRpc(bool disconnect=false) {
 		if (!disconnect) numFinished++;
-		if (numFinished == StartOfRound.Instance.connectedPlayersAmount) {
+		// (connectedPlayersAmount does not include host)
+		if (numFinished >= StartOfRound.Instance.connectedPlayersAmount+1) {
 			this.GetComponent<NetworkObject>().Despawn(true);
 		}
 	}
@@ -305,7 +315,7 @@ public class Cruiser : NetworkBehaviour {
 	}
 }
 
-// extraContext is GameMap that this is parented to
+// extraContext is object that this is parented to
 public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
@@ -334,6 +344,8 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 			rt.transform.parent = moon.transform;
 		} else if (extraContext is DGameMap map) {
 			rt.transform.parent = map.transform;
+		} else if (extraContext is Cruiser c) {
+			rt.transform.parent = c.transform;
 		} else {
 			throw new NullReferenceException($"No moon or map provided for MapObject {rt} to parent to.");
 		}
@@ -348,6 +360,8 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		// network object cannot be instantiated by client
 		if (MapHandler.Instance.IsServer || MapHandler.Instance.IsHost) {
 			rt = Object.Instantiate(GetPrefab(name));
+			rt.gameObject.AddComponent<DummyFlag>();
+			rt.GetComponent<NetworkObject>().Spawn();
 		}
 		
 		return Deserialize(rt, dc, extraContext);
@@ -401,6 +415,7 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	protected override T Deserialize(
 		T s, DeserializationContext dc, object extraContext=null
 	) {
+		s.gameObject.AddComponent<DummyFlag>();
 		if (extraContext is DGameMap map) {
 			s.FindParent(map: map);
 		} else if (extraContext is Moon moon) {
@@ -413,15 +428,19 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 			}
 		}
 		
+		s.Grabbable.startFallingPosition = (
+			s.Grabbable.targetFloorPosition = s.transform.localPosition
+		);
+		
 		return s;
 	}
 	
 	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
+		
 		return Deserialize(
-			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<T>(),
-			dc,
-			extraContext
+			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<T>(), 
+			dc, extraContext
 		);
 	}
 }
@@ -450,8 +469,6 @@ public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> 
 // or at least they will if they use Cruiser
 public class CruiserSerializer : Serializer<Cruiser> {
 	
-	private static GameObject prefab = null;
-	
 	/* Format:
 	 *   float x,y,z
 	 *   Quaternion x,y,z,w
@@ -477,7 +494,7 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		
 		Equipment[] equipment = cruiser.GetComponentsInChildren<Equipment>(true);
 		EquipmentSerializer eqSer = new();
-		sc.Add((ushort)scrap.Length);
+		sc.Add((ushort)equipment.Length);
 		foreach (Equipment eq in equipment) {
 			sc.AddInline(eq,eqSer);
 		}
@@ -503,7 +520,7 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		Quaternion rot = new Quaternion(x,y,z,w);
 		
 		if (cruiser != null) {
-			cruiser.transform.parent = moon.transform;
+			cruiser.SetMoon(moon);
 			cruiser.transform.position = pos;
 			cruiser.transform.rotation = rot;
 		}
@@ -527,15 +544,7 @@ public class CruiserSerializer : Serializer<Cruiser> {
 	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
 		Cruiser rt = null;
 		if (NetworkManager.Singleton.IsServer || NetworkManager.Singleton.IsHost) {
-			if (prefab == null) {
-				foreach (Cruiser vc in Resources.FindObjectsOfTypeAll<Cruiser>()) {
-					if (vc.name == "CompanyCruiser") {
-						prefab = vc.gameObject;
-						break;
-					}
-				}
-			}
-			var g = GameObject.Instantiate(prefab);
+			var g = GameObject.Instantiate(Cruiser.Prefab);
 			g.AddComponent<DummyFlag>();
 			g.GetComponent<NetworkObject>().Spawn();
 			rt = g.GetComponent<Cruiser>();
@@ -554,14 +563,24 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		}
 		sc.Add(netobj.NetworkObjectId);
 		
-		Scrap[] scrap = tgt.GetComponentsInChildren<Scrap>();
+		// cruiser transform isn't synced on spawn?
+		sc.Add(tgt.transform.position.x);
+		sc.Add(tgt.transform.position.y);
+		sc.Add(tgt.transform.position.z);
+		
+		sc.Add(tgt.transform.rotation.x);
+		sc.Add(tgt.transform.rotation.y);
+		sc.Add(tgt.transform.rotation.z);
+		sc.Add(tgt.transform.rotation.w);
+		
+		Scrap[] scrap = tgt.GetComponentsInChildren<Scrap>(true);
 		sc.Add((ushort)scrap.Length);
 		var scrapSerializer = new ScrapNetworkSerializer();
 		foreach (Scrap s in scrap) {
 			sc.AddInline(s,scrapSerializer);
 		}
 		
-		Equipment[] equipment = tgt.GetComponentsInChildren<Equipment>();
+		Equipment[] equipment = tgt.GetComponentsInChildren<Equipment>(true);
 		sc.Add((ushort)equipment.Length);
 		var eqSerializer = new EquipmentNetworkSerializer();
 		foreach (Equipment eq in equipment) {
@@ -572,9 +591,28 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 	protected override Cruiser Deserialize(
 		Cruiser tgt, DeserializationContext dc, object extraContext=null
 	) {
+		if (tgt == null) {
+			Plugin.LogError($"No cruiser referenced to sync");
+			return null;
+		}
 		Moon moon = (Moon)extraContext;
+		if (moon == null) {
+			Plugin.LogError($"No moon referenced to parent cruiser to during sync");
+			return null;
+		}
 		
-		tgt.transform.parent = moon.transform;
+		tgt.SetMoon(moon);
+		
+		dc.Consume(sizeof(float)).CastInto(out float x);
+		dc.Consume(sizeof(float)).CastInto(out float y);
+		dc.Consume(sizeof(float)).CastInto(out float z);
+		tgt.transform.position = new Vector3(x,y,z);
+		
+		dc.Consume(sizeof(float)).CastInto(out x);
+		dc.Consume(sizeof(float)).CastInto(out y);
+		dc.Consume(sizeof(float)).CastInto(out z);
+		dc.Consume(sizeof(float)).CastInto(out float w);
+		tgt.transform.rotation = new Quaternion(x,y,z,w);
 		
 		dc.Consume(2).CastInto(out ushort numScrap);
 		var scrapSerializer = new ScrapNetworkSerializer();
@@ -593,8 +631,11 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 	
 	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
 		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
+		NetworkObject netObj = NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid];
+		netObj.gameObject.AddComponent<DummyFlag>();
+		
 		return Deserialize(
-			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<Cruiser>(),
+			netObj.GetComponent<Cruiser>(),
 			dc,
 			extraContext
 		);

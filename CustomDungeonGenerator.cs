@@ -433,7 +433,7 @@ public class GameMap : MonoBehaviour {
 			leaves = new List<Doorway>();
 			this.leaves.Add(d.Size,leaves);
 		}
-		if (leaves.Contains(d)) Plugin.LogFatal($"Duplicate leaf {d.Tile.name}.{d.name}");
+		if (leaves.Contains(d)) Debug.LogError($"Duplicate leaf {d.Tile.name}.{d.name}", this);
 		leaves.Add(d);
 		
 		Vector3 leafpos = LeafPosition(d);
@@ -441,7 +441,7 @@ public class GameMap : MonoBehaviour {
 			leaves = new(2);
 			this.leavesByPos.Add(leafpos,leaves);
 		}
-		if (leaves.Contains(d)) Plugin.LogFatal($"Duplicate leaf pos {d.Tile.name}.{d.name}");
+		if (leaves.Contains(d)) Debug.LogError($"Duplicate leaf pos {d.Tile.name}.{d.name}", this);
 		leaves.Add(d);
 		
 		numLeaves++;
@@ -454,12 +454,12 @@ public class GameMap : MonoBehaviour {
 		try {
 			this.leaves[d.Size].Remove(d);
 		} catch (KeyNotFoundException) {
-			Plugin.LogFatal($"No leaves of size {d.Size}");
+			Debug.LogError($"No leaves of size {d.Size}",this);
 		}
 		try {
 			this.leavesByPos[LeafPosition(d)].Remove(d);
 		} catch (KeyNotFoundException) {
-			Plugin.LogFatal($"No leaves at {LeafPosition(d)}");
+			Debug.LogError($"No leaves at {LeafPosition(d)}",this);
 		}
 		numLeaves--;
 	}

@@ -10,6 +10,8 @@ using UnityEngine;
 
 using DunGen;
 
+using Object=UnityEngine.Object;
+
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
 	
@@ -133,6 +135,23 @@ public class RespawnBeesPatch {
 		} catch (Exception e) {
 			Plugin.LogError($"{e}");
 			throw;
+		}
+	}
+}
+
+[HarmonyPatch(typeof(GrabbableObject))]
+public class DontFallOnLoad {
+	[HarmonyPatch("Start")]
+	[HarmonyPostfix]
+	public static void CancelFall(GrabbableObject __instance) {
+		DummyFlag dummy = __instance.GetComponent<DummyFlag>();
+		if (dummy != null) {
+			Object.Destroy(dummy);
+			__instance.fallTime = 1f;
+			__instance.hasHitGround = true;
+			__instance.reachedFloorTarget = true;
+			__instance.targetFloorPosition  = __instance.transform.localPosition;
+			__instance.startFallingPosition = __instance.transform.localPosition;
 		}
 	}
 }

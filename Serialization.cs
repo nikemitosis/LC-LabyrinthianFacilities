@@ -51,6 +51,7 @@ public sealed class SerializationContext {
 	private Dictionary<object, ReferenceInfo> queuedReferences;
 	
 	public IList<byte> Output {get {return output.AsReadOnly();}}
+	public int Address {get => output.Count;}
 	
 	public SerializationContext() {
 		this.output = new();
@@ -117,7 +118,7 @@ public sealed class SerializationContext {
 	
 	public void AddInline(object tgt, ISerializer<object> ser) {
 		#if VERBOSE_SERIALIZE
-		Plugin.LogDebug($"I {tgt ?? "null"} | {ser}");
+		Plugin.LogDebug($"I 0x{Address:X} | {tgt ?? "null"} | {ser}");
 		#endif
 		if (references.ContainsKey(tgt)) {
 			throw new InvalidOperationException($"Cannot have two references to the same object ({tgt})");

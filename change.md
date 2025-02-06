@@ -1,14 +1,5 @@
 # v0.3.0
 
-### TODO
- - For Release (Im writing this here because if I don't I *will* forget one of these :P)
-   - Disable verbose logging (if it is on)
-   - Disable SetSeed (if it is on)
-   - Disable log promotion (if it is on)
- - Actual development
-   - Check that everything works between server/client because I don't trust it
-
-
 ### New Features
  - [#2](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/2)
    Made the surfaces of moons distinct from their interiors. If you bring scrap outside, it will still be outside if you take off and come back, even if a different interior is used the next day. 
@@ -17,6 +8,7 @@
 
 ### Bugfixes
  - Fixed a bug where radar icons for scrap would still appear if the scrap was destroyed during map generation. 
+ - Fixed a bug where client-side network deserialization would fail because 
 
 ### QOL Improvements
 - [#8](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/8) Improved prop serialization, props should take ~1/8 the size on disk they were before. 
