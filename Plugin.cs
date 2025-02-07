@@ -638,9 +638,7 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 		}
 	}
 	
-	protected override MapHandler Deserialize(
-		MapHandler baseObj, DeserializationContext dc, object extraContext=null
-	) {
+	protected override MapHandler Deserialize(MapHandler baseObj, DeserializationContext dc) {
 		if (!ReferenceEquals(baseObj, MapHandler.Instance)) {
 			Plugin.LogError($"Deserialzed instance is not MapHandler singleton!");
 			((MapHandler)baseObj).GetComponent<NetworkObject>().Despawn(true);
@@ -656,16 +654,13 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 		
 		return rt;
 	}
-	public override MapHandler Deserialize(
-		DeserializationContext dc, object extraContext=null
-	) {
-		return Deserialize(MapHandler.Instance,dc,extraContext);
+	public override MapHandler Deserialize(DeserializationContext dc) {
+		return Deserialize(MapHandler.Instance,dc);
 	}
 }
 
 public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 	public override void Serialize(SerializationContext sc, MapHandler item) {
-		
 		Moon[] moons = item.GetComponentsInChildren<Moon>(true);
 		sc.Add((ushort)moons.Length);
 		var serializer = new MoonNetworkSerializer();
@@ -674,9 +669,7 @@ public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 		}
 	}
 	
-	protected override MapHandler Deserialize(
-		MapHandler tgt, DeserializationContext dc, object extraContext=null
-	) {
+	protected override MapHandler Deserialize(MapHandler tgt, DeserializationContext dc) {
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numMoons);
 		var ds = new MoonNetworkSerializer();
 		for (ushort i=0; i<numMoons; i++) {
@@ -685,8 +678,8 @@ public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 		return tgt;
 	}
 	
-	public override MapHandler Deserialize(DeserializationContext dc, object extraContext=null) {
-		return Deserialize(MapHandler.Instance,dc,extraContext);
+	public override MapHandler Deserialize(DeserializationContext dc) {
+		return Deserialize(MapHandler.Instance,dc);
 	}
 }
 
@@ -711,13 +704,13 @@ public class MoonSerializer : Serializer<Moon> {
 		sc.Add(moon.name + "\0");
 		
 		// Serialize MapObjects
-		SerializeMapObjects<Scrap>(sc,moon,new ScrapSerializer());
-		SerializeMapObjects<Equipment>(sc,moon,new EquipmentSerializer());
+		SerializeMapObjects<Scrap>(sc,moon,new ScrapSerializer(moon));
+		SerializeMapObjects<Equipment>(sc,moon,new EquipmentSerializer(moon));
 		
 		// Serialize cruisers
 		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
 		sc.Add((ushort)cruisers.Length);
-		var cruiserSerializer = new CruiserSerializer();
+		var cruiserSerializer = new CruiserSerializer(moon);
 		foreach (Cruiser cruiser in cruisers) {
 			sc.AddInline(cruiser,cruiserSerializer);
 		}
@@ -732,7 +725,7 @@ public class MoonSerializer : Serializer<Moon> {
 	}
 	
 	private void DeserializeMapObjects<T>(
-		Moon moon, DeserializationContext dc, ISerializer<T> ds
+		DeserializationContext dc, ISerializer<T> ds
 	)
 		where T : MapObject
 	{
@@ -744,19 +737,19 @@ public class MoonSerializer : Serializer<Moon> {
 		#endif
 		
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds,moon);
+			dc.ConsumeInline(ds);
 		}
 	}
 	
-	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+	protected override Moon Deserialize(Moon moon, DeserializationContext dc) {
 		
-		DeserializeMapObjects<Scrap    >(moon,dc,new ScrapSerializer());
-		DeserializeMapObjects<Equipment>(moon,dc,new EquipmentSerializer());
+		DeserializeMapObjects<Scrap    >(dc,new ScrapSerializer    (moon));
+		DeserializeMapObjects<Equipment>(dc,new EquipmentSerializer(moon));
 		
 		dc.Consume(2).CastInto(out ushort numCruisers);
-		var cruiserSerializer = new CruiserSerializer();
+		var cruiserSerializer = new CruiserSerializer(moon);
 		for (int i=0; i<numCruisers; i++) {
-			dc.ConsumeInline(cruiserSerializer,moon);
+			dc.ConsumeInline(cruiserSerializer);
 		}
 		
 		dc.Consume(2).CastInto(out ushort numMaps);
@@ -768,14 +761,14 @@ public class MoonSerializer : Serializer<Moon> {
 		return moon;
 	}
 	
-	public override Moon Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override Moon Deserialize(DeserializationContext dc) {
 		dc.ConsumeUntil(
 			(byte b) => (b == 0)
 		).CastInto(out string id);
 		dc.Consume(1); // null terminator
 		
 		Moon rt = new GameObject(id).AddComponent<Moon>();
-		return Deserialize(rt, dc, extraContext);
+		return Deserialize(rt, dc);
 	}
 	
 	public override void Finalize(Moon moon) {
@@ -804,19 +797,19 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		sc.Add(moon.name+"\0");
 		
 		// MapObjects
-		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer());
-		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer());
+		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer(moon));
+		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer(moon));
 		
 		// Cruisers
 		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
-		var ser = new CruiserNetworkSerializer();
+		var ser = new CruiserNetworkSerializer(moon);
 		sc.Add((ushort)cruisers.Length);
 		foreach (var cruiser in cruisers) {
 			sc.AddInline(cruiser, ser);
 		}
 		
 		// Maps
-		var mapSer = new DGameMapNetworkSerializer();
+		var mapSer = new DGameMapNetworkSerializer(null);
 		DGameMap[] maps = moon.GetComponentsInChildren<DGameMap>(true);
 		sc.Add((ushort)maps.Length);
 		foreach (DGameMap map in maps) {
@@ -825,7 +818,7 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	}
 	
 	private void DeserializeMapObjects<T>(
-		Moon moon, DeserializationContext dc, ISerializer<T> ds
+		DeserializationContext dc, ISerializer<T> ds
 	)
 		where T : MapObject
 	{
@@ -837,36 +830,36 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		#endif
 		
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds,moon);
+			dc.ConsumeInline(ds);
 		}
 	}
 	
-	protected override Moon Deserialize(Moon moon, DeserializationContext dc, object extraContext=null) {
+	protected override Moon Deserialize(Moon moon, DeserializationContext dc) {
 		// MapObjects
-		DeserializeMapObjects<Scrap    >(moon, dc, new ScrapNetworkSerializer());
-		DeserializeMapObjects<Equipment>(moon, dc, new EquipmentNetworkSerializer());
+		DeserializeMapObjects<Scrap    >(dc, new ScrapNetworkSerializer    (moon));
+		DeserializeMapObjects<Equipment>(dc, new EquipmentNetworkSerializer(moon));
 		
 		// Cruisers
 		dc.Consume(2).CastInto(out ushort numCruisers);
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"Loading {numCruisers} cruisers for {moon.name} from address 0x{dc.Address:X}");
 		#endif
-		var cruiserSerializer = new CruiserNetworkSerializer();
+		var cruiserSerializer = new CruiserNetworkSerializer(moon);
 		for (ushort i=0; i<numCruisers; i++) {
-			dc.ConsumeInline(cruiserSerializer, moon);
+			dc.ConsumeInline(cruiserSerializer);
 		}
 		
 		// DGameMaps
 		dc.Consume(2).CastInto(out ushort numMaps);
-		var ds = new DGameMapNetworkSerializer();
+		var ds = new DGameMapNetworkSerializer(moon);
 		for (ushort i=0; i<numMaps; i++) {
-			dc.ConsumeInline(ds, moon);
+			dc.ConsumeInline(ds);
 		}
 		
 		return moon;
 	}
 	
-	public override Moon Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override Moon Deserialize(DeserializationContext dc) {
 		dc.ConsumeUntil(
 			(byte b) => (b == 0)
 		).CastInto(out string id);
@@ -878,7 +871,7 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 			return null;
 		}
 		
-		return Deserialize(moon, dc, extraContext);
+		return Deserialize(moon, dc);
 	}
 	
 	public override void Finalize(Moon moon) {

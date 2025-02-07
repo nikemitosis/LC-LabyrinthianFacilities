@@ -12,7 +12,7 @@ public interface ISerializer<out T> {
 	// but then if you call the action with a tile when it expects a map... (both are objects) :(
 	public void Serialize(SerializationContext sc, object tgt); 
 	
-	public T Deserialize(DeserializationContext dc, object extraContext=null);
+	public T Deserialize(DeserializationContext dc);
 	
 	public void Finalize(object obj);
 }
@@ -26,10 +26,10 @@ public abstract class Serializer<T> : ISerializer<T> {
 	// ISerializer.Deserialize
 	// Intended to instantiate some kind of prefab or default object, and initialize it with above
 	// Not intended to be used by inheritors, just for DeserializationContext
-	public abstract T Deserialize(DeserializationContext dc, object extraContext=null);
+	public abstract T Deserialize(DeserializationContext dcl);
 	
 	// The bulk of deserialization should occur here
-	protected abstract T Deserialize(T baseObject, DeserializationContext dc, object extraContext=null);
+	protected abstract T Deserialize(T baseObject, DeserializationContext dc);
 	
 	
 	// ISerializer.Finalize
@@ -133,10 +133,10 @@ public sealed class SerializationContext {
 			}
 			queuedReferences.Remove(tgt);
 			
-			GetBetterSerializer(refInfo.serializer, ser).Serialize(this, tgt);
-		} else {
-			ser.Serialize(this, tgt);
+			ser = GetBetterSerializer(refInfo.serializer, ser);
 		}
+		if (ser == null) throw new ArgumentNullException($"No serializer provided for {tgt}");
+		ser.Serialize(this, tgt);
 		
 	}
 	
@@ -200,7 +200,6 @@ public sealed class SerializationContext {
 internal class ReferenceInfo {
 	public ISerializer<object> deserializer = null;
 	public List<Action<object>> actions = new();
-	public object context = null;
 }
 
 // Relies on the assumption that data before an object will identify it
@@ -217,8 +216,8 @@ public sealed class DeserializationContext {
 	
 	private ReadOnlySpan<byte> Data {get {return data;}}
 	public int Address {
-		get {return address;}
-		private set {address = value;}
+		get => address;
+		private set => address = value;
 	}
 	
 	public DeserializationContext(byte[] data) {
@@ -230,11 +229,8 @@ public sealed class DeserializationContext {
 		this.address = 1;
 	}
 	
-	public object Deserialize(
-		ISerializer<object> rootDeserializer, 
-		object rootContext=null
-	) {
-		object rt = ConsumeInline(rootDeserializer,rootContext);
+	public object Deserialize(ISerializer<object> rootDeserializer) {
+		object rt = ConsumeInline(rootDeserializer);
 		
 		if (address != data.Length) {
 			Plugin.LogWarning(
@@ -293,9 +289,9 @@ public sealed class DeserializationContext {
 	// immediately resolves the reference
 	public int ConsumeReference(
 		ISerializer<object> deserializer, 
-		Action<object> action=null, 
-		object context=null
+		Action<object> action=null
 	) {
+		
 		this.Consume(4).CastInto(out int addr);
 		
 		// Already resolved
@@ -342,21 +338,25 @@ public sealed class DeserializationContext {
 		}
 		
 		if (action != null) refInfo.actions.Add(action);
-		refInfo.context ??= context;
 		
 		return addr;
 	}
 	
-	public object ConsumeInline(ISerializer<object> deserializer, object context=null) {
+	public object ConsumeInline(ISerializer<object> deserializer) {
+		if (deserializer == null) {
+			throw new ArgumentNullException(
+				$"No deserializer provided for object at address 0x{address:X}"
+			);
+		}
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"L 0x{address:X} | {deserializer.GetType()}");
 		#endif
 		int addr = address;
-		var rt = deserializer.Deserialize(this,context);
+		var rt = deserializer.Deserialize(this);
 		finalizers.Add((rt, deserializer.Finalize));
 		AddReference(addr, rt);
 		if (unresolvedReferences.TryGetValue(address, out ReferenceInfo refInfo)) {
-			ConsumeInline(refInfo.deserializer, refInfo.context);
+			ConsumeInline(refInfo.deserializer);
 		}
 		return rt;
 	}

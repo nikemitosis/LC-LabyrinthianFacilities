@@ -523,11 +523,17 @@ public class GameMap : MonoBehaviour {
 	
 }
 
-public class GameMapSerializer<T,TTile,TTileSer> : Serializer<T> 
+public class GameMapSerializer<T,TTile> : Serializer<T> 
 	where T : GameMap 
 	where TTile : Tile 
-	where TTileSer : ISerializer<TTile>, new()
 {
+	
+	protected ISerializer<TTile> TileSer;
+	
+	public GameMapSerializer(ISerializer<TTile> tileSerializer) {
+		TileSer = tileSerializer;
+	}
+	
 	/* Format:
 	 *   Name
 	 *   RootTile
@@ -536,31 +542,36 @@ public class GameMapSerializer<T,TTile,TTileSer> : Serializer<T>
 		sc.Add(map.name.GetBytes());
 		sc.Add(new byte[1]{0});
 		
-		sc.AddInline(map.RootTile, new TTileSer());
+		sc.AddInline(map.RootTile, TileSer);
 	}
 	
 	// Expects that ident has already been consumed
-	// extraContext is TTileSer that deserializes tiles, or null for a default deserializer
-	protected override T Deserialize(T map, DeserializationContext dc, object extraContext=null) {
-		var tileDeserializer = ((TTileSer)extraContext) ?? new TTileSer();
+	protected override T Deserialize(T map, DeserializationContext dc) {
 		
-		map.AddTile(new PlacementInfo((TTile)dc.ConsumeInline(tileDeserializer,map)));
+		map.AddTile(new PlacementInfo((TTile)dc.ConsumeInline(TileSer)));
 		
 		return map;
 	}
 	
-	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc) {
 		dc.ConsumeUntil(
 			(byte b) => (b == 0)
 		).CastInto(out string id);
 		dc.Consume(1); // null terminator
 		
 		T rt = new GameObject(id).AddComponent<T>();
-		return Deserialize(rt, dc, extraContext);
+		return Deserialize(rt, dc);
 	}
 }
 
 public class TileSerializer<T> : Serializer<T> where T : Tile {
+	
+	protected GameMap ParentMap;
+	
+	public TileSerializer(GameMap map) {
+		this.ParentMap = map;
+	}
+	
 	/* Format:
 	 *  string prefabIdentifier
 	 *      Defaulting to prefab name, cuz I don't know a more reliably unique identifier
@@ -592,17 +603,14 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 		}
 	}
 	
-	protected override T Deserialize(
-		T tile, DeserializationContext dc, object extraContext=null
-	) {
-		GameMap parentMap = (GameMap)extraContext;
+	protected override T Deserialize(T tile, DeserializationContext dc) {
 		int address = dc.Address;
 		bool hasConnected = false;
 		
 		dc.Consume(2).CastInto(out ushort numDoors);
 		for (int didx=0; didx<numDoors; didx++) {
 			int thisDoorIndex = didx;
-			int tileConnection = dc.ConsumeReference(this, context: parentMap);
+			int tileConnection = dc.ConsumeReference(this);
 			dc.Consume(2).CastInto(out ushort otherDoorIndex);
 			
 			if (tileConnection == 0) continue;
@@ -614,7 +622,7 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 				#endif
 				if (!hasConnected) {
 					hasConnected = true;
-					parentMap.AddTile(
+					ParentMap.AddTile(
 						new PlacementInfo(
 							tile, 
 							thisDoorIndex, 
@@ -622,7 +630,7 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 						)
 					);
 				} else {
-					parentMap.PerformAction(
+					ParentMap.PerformAction(
 						new ConnectAction(
 							tile.Doorways[thisDoorIndex],
 							other.Doorways[(int)otherDoorIndex]
@@ -639,14 +647,8 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 	}
 	
 	// extraContext is parent map
-	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc) {
 		int address = dc.Address;
-		GameMap parentMap = (GameMap)extraContext;
-		if (parentMap == null) {
-			throw new InvalidCastException(
-				$"{extraContext} could not be cast into a {nameof(GameMap)}"
-			);
-		}
 		
 		dc.ConsumeUntil(
 			(byte b) => b == 0
@@ -655,11 +657,11 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 		
 		// The fact that I can't do T.GetPrefab is the dumbest shit. 
 		// Why does C# hate static methods so much??
-		T t = (T)Tile.GetPrefab(id)?.Instantiate(parentMap.transform);
+		T t = (T)Tile.GetPrefab(id)?.Instantiate(ParentMap.transform);
 		if (t == null) {
 			throw new NullReferenceException($"Could not find a prefab with id '{id}'");
 		}
-		return Deserialize(t, dc, parentMap);
+		return Deserialize(t, dc);
 		
 	}
 }

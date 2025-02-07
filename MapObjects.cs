@@ -49,8 +49,11 @@ public class MapObject : NetworkBehaviour {
 	
 	public virtual void Preserve() {
 		var grabbable = this.Grabbable;
-		grabbable.isInShipRoom = StartOfRound.Instance.shipInnerRoomBounds.bounds.Contains(
-			grabbable.transform.position
+		grabbable.isInShipRoom = (
+			grabbable.isInShipRoom
+			|| StartOfRound.Instance.shipInnerRoomBounds.bounds.Contains(
+				grabbable.transform.position
+			)
 		); // fix isInShipRoom for people joining partway through a save
 		
 		if (
@@ -319,6 +322,18 @@ public class Cruiser : NetworkBehaviour {
 public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
+	private MonoBehaviour parent;
+	
+	public MapObjectSerializer(Moon m) {
+		parent = m;
+	}
+	public MapObjectSerializer(DGameMap m) {
+		this.parent = m;
+	}
+	public MapObjectSerializer(Cruiser c) {
+		this.parent = c;
+	}
+	
 	/* Format:
 	 * Identifier: string
 	 * position: Vector3 
@@ -332,7 +347,7 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		sc.Add(tgt.transform.position.z);
 	}
 	
-	protected override T Deserialize(T rt, DeserializationContext dc, object extraContext=null) {
+	protected override T Deserialize(T rt, DeserializationContext dc) {
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
@@ -340,18 +355,11 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		if (rt == null) return null;
 		rt.transform.position = new Vector3(x,y,z);
 		
-		if (extraContext is Moon moon) {
-			rt.transform.parent = moon.transform;
-		} else if (extraContext is DGameMap map) {
-			rt.transform.parent = map.transform;
-		} else if (extraContext is Cruiser c) {
-			rt.transform.parent = c.transform;
-		} else {
-			throw new NullReferenceException($"No moon or map provided for MapObject {rt} to parent to.");
-		}
+		rt.transform.parent = this.parent.transform;
+		
 		return rt;
 	}
-	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc) {
 		
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string name);
 		dc.Consume(1); // null terminator
@@ -364,12 +372,16 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 			rt.GetComponent<NetworkObject>().Spawn();
 		}
 		
-		return Deserialize(rt, dc, extraContext);
+		return Deserialize(rt, dc);
 	}
 }
 
 public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	public override Scrap GetPrefab(string id) => Scrap.GetPrefab(id);
+	
+	public ScrapSerializer(Moon     p) : base(p) {}
+	public ScrapSerializer(DGameMap p) : base(p) {}
+	public ScrapSerializer(Cruiser  p) : base(p) {}
 	
 	/* Format:
 	 *     base
@@ -381,9 +393,9 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	}
 	
 	protected override Scrap Deserialize(
-		Scrap rt, DeserializationContext dc, object extraContext=null
+		Scrap rt, DeserializationContext dc
 	) {
-		base.Deserialize(rt,dc,extraContext);
+		base.Deserialize(rt,dc);
 		
 		dc.Consume(4).CastInto(out int scrapValue);
 		
@@ -395,13 +407,22 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 }
 
 public class EquipmentSerializer : MapObjectSerializer<Equipment> {
+	public EquipmentSerializer(Moon     p) : base(p) {}
+	public EquipmentSerializer(DGameMap p) : base(p) {}
+	public EquipmentSerializer(Cruiser  p) : base(p) {}
+	
 	public override Equipment GetPrefab(string id) => Equipment.GetPrefab(id);
 	
 	public override void Serialize(SerializationContext sc, Equipment eq) => base.Serialize(sc,eq);
 }
 
-// extraContext is DGameMap or Moon that this is parented to
 public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
+	private MonoBehaviour parent;
+	
+	public MapObjectNetworkSerializer(Moon     p) {this.parent = p;}
+	public MapObjectNetworkSerializer(DGameMap p) {this.parent = p;}
+	public MapObjectNetworkSerializer(Cruiser  p) {this.parent = p;}
+	
 	public override void Serialize(SerializationContext sc, T obj) {
 		var netObj = obj.GetComponent<NetworkObject>();
 		if (!(netObj?.IsSpawned ?? false)) {
@@ -412,20 +433,12 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 		sc.Add(netObj.NetworkObjectId);
 	}
 	
-	protected override T Deserialize(
-		T s, DeserializationContext dc, object extraContext=null
-	) {
+	protected override T Deserialize(T s, DeserializationContext dc) {
 		s.gameObject.AddComponent<DummyFlag>();
-		if (extraContext is DGameMap map) {
+		if (parent is DGameMap map) {
 			s.FindParent(map: map);
-		} else if (extraContext is Moon moon) {
-			s.transform.parent = moon.transform;
-		} else if (extraContext is Cruiser cruiser) {
-			s.transform.parent = cruiser.transform;
 		} else {
-			try {s.FindParent();} catch (NullReferenceException) {
-				throw new NullReferenceException("No moon/map provided to network-deserialized MapObject");
-			}
+			s.transform.parent = this.parent.transform;
 		}
 		
 		s.Grabbable.startFallingPosition = (
@@ -435,26 +448,31 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 		return s;
 	}
 	
-	public override T Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override T Deserialize(DeserializationContext dc) {
 		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
 		
 		return Deserialize(
 			NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid].GetComponent<T>(), 
-			dc, extraContext
+			dc
 		);
 	}
 }
 
 public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
+	
+	public ScrapNetworkSerializer(Moon     p) : base(p) {}
+	public ScrapNetworkSerializer(DGameMap p) : base(p) {}
+	public ScrapNetworkSerializer(Cruiser  p) : base(p) {}
+	
 	public override void Serialize(SerializationContext sc, Scrap s) {
 		base.Serialize(sc,s);
 		sc.Add(s.Grabbable.scrapValue);
 	}
 	
 	protected override Scrap Deserialize(
-		Scrap s, DeserializationContext dc, object extraContext=null
+		Scrap s, DeserializationContext dc
 	) {
-		base.Deserialize(s,dc,extraContext);
+		base.Deserialize(s,dc);
 		
 		dc.Consume(sizeof(int)).CastInto(out int scrapValue);
 		s.Grabbable.SetScrapValue(scrapValue);
@@ -463,11 +481,18 @@ public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
 	}
 }
 
-public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> {}
+public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> {
+	public EquipmentNetworkSerializer(Moon     p) : base(p) {}
+	public EquipmentNetworkSerializer(DGameMap p) : base(p) {}
+	public EquipmentNetworkSerializer(Cruiser  p) : base(p) {}
+}
 
 // This will break with other vehicles, either modded or added into the game 
 // or at least they will if they use Cruiser
 public class CruiserSerializer : Serializer<Cruiser> {
+	
+	private Moon parent;
+	public CruiserSerializer(Moon m) {parent = m;}
 	
 	/* Format:
 	 *   float x,y,z
@@ -486,27 +511,24 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		sc.Add(cruiser.transform.rotation.w);
 		
 		Scrap[] scrap = cruiser.GetComponentsInChildren<Scrap>(true);
-		ScrapSerializer scrapSer = new ScrapSerializer();
+		ScrapSerializer scrapSer = new ScrapSerializer((Moon)null);
 		sc.Add((ushort)scrap.Length);
 		foreach (Scrap s in scrap) {
 			sc.AddInline(s,scrapSer);
 		}
 		
 		Equipment[] equipment = cruiser.GetComponentsInChildren<Equipment>(true);
-		EquipmentSerializer eqSer = new();
+		EquipmentSerializer eqSer = new((Moon)null);
 		sc.Add((ushort)equipment.Length);
 		foreach (Equipment eq in equipment) {
 			sc.AddInline(eq,eqSer);
 		}
 	}
 	
-	// extraContext is Moon
 	protected override Cruiser Deserialize(
-		Cruiser cruiser, DeserializationContext dc, object extraContext=null
+		Cruiser cruiser, DeserializationContext dc
 	) {
 		// Cruiser is null for clients! (deliberate, clients cannot control network objects)
-		
-		var moon = (Moon)extraContext;
 		
 		dc.Consume(4).CastInto(out float x);
 		dc.Consume(4).CastInto(out float y);
@@ -520,28 +542,27 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		Quaternion rot = new Quaternion(x,y,z,w);
 		
 		if (cruiser != null) {
-			cruiser.SetMoon(moon);
+			cruiser.SetMoon(parent);
 			cruiser.transform.position = pos;
 			cruiser.transform.rotation = rot;
 		}
 		
 		dc.Consume(2).CastInto(out ushort count);
-		var scrapSer = new ScrapSerializer();
+		var scrapSer = new ScrapSerializer(cruiser);
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(scrapSer,cruiser);
+			dc.ConsumeInline(scrapSer);
 		}
 		
 		dc.Consume(2).CastInto(out count);
-		var eqSer = new EquipmentSerializer();
+		var eqSer = new EquipmentSerializer(cruiser);
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(eqSer,cruiser);
+			dc.ConsumeInline(eqSer);
 		}
 		
 		return cruiser;
 	}
 	
-	// extraContext is Moon
-	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override Cruiser Deserialize(DeserializationContext dc) {
 		Cruiser rt = null;
 		if (NetworkManager.Singleton.IsServer || NetworkManager.Singleton.IsHost) {
 			var g = GameObject.Instantiate(Cruiser.Prefab);
@@ -549,11 +570,14 @@ public class CruiserSerializer : Serializer<Cruiser> {
 			g.GetComponent<NetworkObject>().Spawn();
 			rt = g.GetComponent<Cruiser>();
 		}
-		return Deserialize(rt,dc,extraContext);
+		return Deserialize(rt,dc);
 	}
 }
 
 public class CruiserNetworkSerializer : Serializer<Cruiser> {
+	private Moon parent;
+	public CruiserNetworkSerializer(Moon m) {parent=m;}
+	
 	public override void Serialize(SerializationContext sc, Cruiser tgt) {
 		var netobj = tgt.GetComponent<NetworkObject>();
 		if (netobj == null || !netobj.IsSpawned) {
@@ -575,33 +599,31 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		
 		Scrap[] scrap = tgt.GetComponentsInChildren<Scrap>(true);
 		sc.Add((ushort)scrap.Length);
-		var scrapSerializer = new ScrapNetworkSerializer();
+		var scrapSerializer = new ScrapNetworkSerializer((Moon)null);
 		foreach (Scrap s in scrap) {
 			sc.AddInline(s,scrapSerializer);
 		}
 		
 		Equipment[] equipment = tgt.GetComponentsInChildren<Equipment>(true);
 		sc.Add((ushort)equipment.Length);
-		var eqSerializer = new EquipmentNetworkSerializer();
+		var eqSerializer = new EquipmentNetworkSerializer((Moon)null);
 		foreach (Equipment eq in equipment) {
 			sc.AddInline(eq,eqSerializer);
 		}
 	}
 	
-	protected override Cruiser Deserialize(
-		Cruiser tgt, DeserializationContext dc, object extraContext=null
-	) {
+	protected override Cruiser Deserialize(Cruiser tgt, DeserializationContext dc) {
 		if (tgt == null) {
 			Plugin.LogError($"No cruiser referenced to sync");
 			return null;
 		}
-		Moon moon = (Moon)extraContext;
-		if (moon == null) {
+		
+		if (parent == null) {
 			Plugin.LogError($"No moon referenced to parent cruiser to during sync");
 			return null;
 		}
 		
-		tgt.SetMoon(moon);
+		tgt.SetMoon(parent);
 		
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
@@ -615,29 +637,25 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		tgt.transform.rotation = new Quaternion(x,y,z,w);
 		
 		dc.Consume(2).CastInto(out ushort numScrap);
-		var scrapSerializer = new ScrapNetworkSerializer();
+		var scrapSerializer = new ScrapNetworkSerializer(tgt);
 		for (ushort i=0; i<numScrap; i++) {
-			dc.ConsumeInline(scrapSerializer,tgt);
+			dc.ConsumeInline(scrapSerializer);
 		}
 		
 		dc.Consume(2).CastInto(out ushort numEquipment);
-		var equipmentSerializer = new EquipmentNetworkSerializer();
+		var equipmentSerializer = new EquipmentNetworkSerializer(tgt);
 		for (ushort i=0; i<numEquipment; i++) {
-			dc.ConsumeInline(equipmentSerializer,tgt);
+			dc.ConsumeInline(equipmentSerializer);
 		}
 		
 		return tgt;
 	}
 	
-	public override Cruiser Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override Cruiser Deserialize(DeserializationContext dc) {
 		dc.Consume(sizeof(ulong)).CastInto(out ulong netobjid);
 		NetworkObject netObj = NetworkManager.Singleton.SpawnManager.SpawnedObjects[netobjid];
 		netObj.gameObject.AddComponent<DummyFlag>();
 		
-		return Deserialize(
-			netObj.GetComponent<Cruiser>(),
-			dc,
-			extraContext
-		);
+		return Deserialize(netObj.GetComponent<Cruiser>(),dc);
 	}
 }

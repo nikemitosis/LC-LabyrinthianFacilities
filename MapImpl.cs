@@ -981,10 +981,12 @@ public class DungeonFlowConverter : ITileGenerator {
 	
 }
 
-public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerializer> {
-	private void DeserializeMapObjects<T,U>(DGameMap map, DeserializationContext dc)
+public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
+	
+	public DGameMapSerializer() : base(null) {}
+	
+	private void DeserializeMapObjects<T>(ISerializer<T> ds, DeserializationContext dc)
 		where T : MapObject
-		where U : MapObjectSerializer<T>, new()
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
 		#if VERBOSE_DESERIALIZE
@@ -992,9 +994,8 @@ public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerial
 				$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
 			);
 		#endif
-		U ds = new();
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds,map);
+			dc.ConsumeInline(ds);
 		}
 	}
 	
@@ -1011,19 +1012,20 @@ public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerial
 	}
 	
 	public override void Serialize(SerializationContext sc, DGameMap tgt) {
+		base.TileSer = new DTileSerializer(tgt);
 		base.Serialize(sc,tgt);
 		
-		SerializeMapObjects<Scrap>(sc,tgt,new ScrapSerializer());
-		SerializeMapObjects<Equipment>(sc,tgt,new EquipmentSerializer());
+		SerializeMapObjects<Scrap>(sc,tgt,new ScrapSerializer((Moon)null));
+		SerializeMapObjects<Equipment>(sc,tgt,new EquipmentSerializer((Moon)null));
 	}
 	
-	// extraContext is a DTileSerializer or null for a new instance
 	protected override DGameMap Deserialize(
-		DGameMap rt, DeserializationContext dc, object extraContext=null
+		DGameMap rt, DeserializationContext dc
 	) {
-		base.Deserialize(rt,dc,extraContext);
-		DeserializeMapObjects<Scrap, ScrapSerializer>(rt,dc);
-		DeserializeMapObjects<Equipment, EquipmentSerializer>(rt,dc);
+		base.TileSer = new DTileSerializer(rt);
+		base.Deserialize(rt,dc);
+		DeserializeMapObjects<Scrap    >(new ScrapSerializer    (rt),dc);
+		DeserializeMapObjects<Equipment>(new EquipmentSerializer(rt),dc);
 		
 		return rt;
 	}
@@ -1034,7 +1036,9 @@ public class DGameMapSerializer : GameMapSerializer<DGameMap, DTile, DTileSerial
 	}
 }
 
-public class DTileSerializer : TileSerializer<DTile> {
+public sealed class DTileSerializer : TileSerializer<DTile> {
+	
+	public DTileSerializer(GameMap p) : base(p) {}
 	
 	public override void Serialize(SerializationContext sc, DTile tgt) {
 		base.Serialize(sc,tgt);
@@ -1058,9 +1062,9 @@ public class DTileSerializer : TileSerializer<DTile> {
 	
 	
 	protected override DTile Deserialize(
-		DTile tile, DeserializationContext dc, object extraContext=null
+		DTile tile, DeserializationContext dc
 	) {
-		base.Deserialize(tile,dc,extraContext);
+		base.Deserialize(tile,dc);
 		
 		#if VERBOSE_DESERIALIZE
 		Plugin.LogDebug($"Deserializing {tile.name}");
@@ -1088,7 +1092,13 @@ public class DTileSerializer : TileSerializer<DTile> {
 	}
 }
 
-public class DGameMapNetworkSerializer : Serializer<DGameMap> {
+public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
+	
+	private Moon Moon;
+	
+	public DGameMapNetworkSerializer(Moon m) {
+		this.Moon = m;
+	}
 	
 	private void SerializeMapObjects<T>(SerializationContext sc, DGameMap map, ISerializer<T> serializer) 
 		where T : MapObject 
@@ -1103,8 +1113,8 @@ public class DGameMapNetworkSerializer : Serializer<DGameMap> {
 	public override void Serialize(SerializationContext sc, DGameMap m) {
 		sc.Add(m.name+"\0");
 		
-		SerializeMapObjects<Scrap>(sc, m, new ScrapNetworkSerializer());
-		SerializeMapObjects<Equipment>(sc, m, new EquipmentNetworkSerializer());
+		SerializeMapObjects<Scrap>(sc, m, new ScrapNetworkSerializer((Moon)null));
+		SerializeMapObjects<Equipment>(sc, m, new EquipmentNetworkSerializer((Moon)null));
 	}
 	
 	private void DeserializeMapObjects<T>(
@@ -1120,23 +1130,22 @@ public class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		#endif
 		
 		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds,map);
+			dc.ConsumeInline(ds);
 		}
 	}
 	
-	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc, object extraContext=null) {
-		DeserializeMapObjects<Scrap    >(map, dc, new ScrapNetworkSerializer());
-		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer());
+	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc) {
+		DeserializeMapObjects<Scrap    >(map, dc, new ScrapNetworkSerializer(map));
+		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer(map));
 		
 		return map;
 	}
 	
-	public override DGameMap Deserialize(DeserializationContext dc, object extraContext=null) {
+	public override DGameMap Deserialize(DeserializationContext dc) {
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
 		dc.Consume(1);
 		
-		Moon moon = (Moon)extraContext; 
-		DGameMap map = moon.transform.Find(id).GetComponent<DGameMap>();
-		return Deserialize(map,dc,extraContext);
+		DGameMap map = Moon.transform.Find(id).GetComponent<DGameMap>();
+		return Deserialize(map,dc);
 	}
 }
