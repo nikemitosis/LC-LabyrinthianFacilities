@@ -278,6 +278,7 @@ public class MapHandler : NetworkBehaviour {
 	}
 	
 	public void ClearActiveMoon() {
+		if (this.activeMoon != null) this.activeMoon.gameObject.SetActive(false);
 		this.activeMoon = null;
 	}
 	
@@ -298,8 +299,11 @@ public class MapHandler : NetworkBehaviour {
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveMapObjects() {
-		Plugin.LogInfo("Hiding Map Objects!");
 		this.activeMoon?.PreserveMapObjects();
+	}
+	
+	public void PreserveBees() {
+		this.activeMoon?.PreserveBees();
 	}
 	
 	public void DestroyAllScrap() {
@@ -348,13 +352,13 @@ public class MapHandler : NetworkBehaviour {
 	}
 	public void LoadMoon(Moon m) {
 		m.transform.parent = this.transform;
-		// m.transform.position -= Vector3.up * 200.0f;
 		this.unresolvedMoons.Add(m.name,m);
 	}
 	
 	public void Clear() {
-		if (!(base.IsServer || base.IsHost)) return;
+		if (!base.IsServer) return;
 		this.GetComponent<NetworkObject>().Despawn();
+		SaveManager.DeleteFile($"{SaveManager.CurrentSave}.dat");
 		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
 	}
 	
@@ -496,6 +500,12 @@ public class Moon : MonoBehaviour {
 		
 		foreach (var cruiser in Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None)) {
 			cruiser.Preserve();
+		}
+	}
+	
+	public void PreserveBees() {
+		foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
+			bee.hive.GetComponent<Beehive>().SaveBees(bee);
 		}
 	}
 	

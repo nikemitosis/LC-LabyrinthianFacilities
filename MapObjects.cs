@@ -57,13 +57,12 @@ public class MapObject : NetworkBehaviour {
 		); // fix isInShipRoom for people joining partway through a save
 		
 		if (
-			!grabbable.isInShipRoom
-			&& this.transform.parent?.GetComponent<Cruiser>() == null // exclude things on cruiser
-		) {
-			this.FindParent();
-			this.gameObject.SetActive(false);
-		}
+			grabbable.isInShipRoom
+			|| this.transform.parent?.GetComponent<Cruiser>() != null // exclude things on cruiser
+		) return; 
 		
+		this.FindParent();
+		this.gameObject.SetActive(false);
 	}
 	
 	public virtual void Restore() {
@@ -194,36 +193,24 @@ public class Beehive : Scrap {
 		SendBeesClientRpc(netObj);
 	}
 	
+	public void SaveBees(RedLocustBees bees) {
+		this.bees = bees;
+		if (bees != null) {
+			this.beeInfo = new BeeInfo(
+				position: this.bees.transform.position, 
+				currentBehaviourStateIndex: this.bees.currentBehaviourStateIndex
+			);
+		} else {
+			this.beeInfo = new BeeInfo(Vector3.zero, -1);
+		}
+	}
+	
 	public override void Preserve() {
 		base.Preserve();
 		
-		GrabbableObject grabbable = this.Grabbable;
-		if (grabbable.isInShipRoom) {
+		if (this.Grabbable.isInShipRoom) {
 			this.beeInfo = new BeeInfo(Vector3.zero, -1);
-			return;
 		}
-		
-		if (this.bees == null) {
-			foreach (RedLocustBees swarm in Object.FindObjectsByType(
-				typeof(RedLocustBees), 
-				FindObjectsSortMode.None
-			)) {
-				if (swarm.hive == grabbable) {
-					this.bees = swarm;
-					break;
-				}
-			}
-			if (this.bees == null) {
-				Plugin.LogError($"Could not find bees for hive");
-				return;
-			}
-		}
-		
-		this.beeInfo = new BeeInfo(
-			position: this.bees.transform.position, 
-			currentBehaviourStateIndex: this.bees.currentBehaviourStateIndex
-		);
-		
 	}
 	
 }
@@ -272,16 +259,16 @@ public class Cruiser : NetworkBehaviour {
 	}
 	
 	public void Restore() {
-		if (NetworkManager.Singleton.IsHost || NetworkManager.Singleton.IsServer) {
-			GameObject    gameObj = GameObject.Instantiate(Prefab);
-			NetworkObject netObj  = gameObj.GetComponent<NetworkObject>();
-			
-			gameObj.transform.position = this.transform.position;
-			gameObj.transform.rotation = this.transform.rotation;
-			
-			netObj.Spawn();
-			RestoreClientRpc(this.NetworkObjectId, netObj.NetworkObjectId);
-		}
+		if (!this.IsServer) return;
+		
+		GameObject    gameObj = GameObject.Instantiate(Prefab);
+		NetworkObject netObj  = gameObj.GetComponent<NetworkObject>();
+		
+		gameObj.transform.position = this.transform.position;
+		gameObj.transform.rotation = this.transform.rotation;
+		
+		netObj.Spawn();
+		RestoreClientRpc(this.NetworkObjectId, netObj.NetworkObjectId);
 	}
 	
 	[ClientRpc]

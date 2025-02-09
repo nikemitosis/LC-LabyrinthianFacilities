@@ -60,6 +60,17 @@ class PreserveScrapPatch {
 	
 	[HarmonyPatch("UnloadSceneObjectsEarly")]
 	[HarmonyPrefix]
+	public static void PreserveEnemies() {
+		try {
+			MapHandler.Instance.PreserveBees();
+		} catch (Exception e) {
+			Plugin.LogError($"{e}");
+			throw;
+		}
+	}
+	
+	[HarmonyPatch("DespawnPropsAtEndOfRound")]
+	[HarmonyPrefix]
 	public static void PreserveScrap() {
 		try {
 			MapHandler.Instance.PreserveMapObjects();
