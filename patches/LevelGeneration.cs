@@ -16,7 +16,7 @@ using Object=UnityEngine.Object;
 class GenerateLevel {
 	
 	#if SETSEED
-	public static int SetSeed = 0;
+	public static int SetSeed = 1860430165;
 	#endif
 	
 	[HarmonyPatch("Generate")]

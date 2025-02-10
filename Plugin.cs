@@ -29,7 +29,7 @@ using Object = UnityEngine.Object;
 public class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.3.0";
+	public const string VERSION = "0.3.2";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;

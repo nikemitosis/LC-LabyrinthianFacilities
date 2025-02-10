@@ -236,7 +236,9 @@ public class Tile : MonoBehaviour {
 	}
 }
 
-public abstract class GenerationAction {}
+public class GenerationAction {
+	public virtual bool YieldFrame {get => true;}
+}
 
 public class PlacementInfo : GenerationAction {
 	private Tile newtile;
@@ -277,6 +279,8 @@ public class RemovalInfo : GenerationAction {
 }
 
 public abstract class ConnectionAction : GenerationAction {
+	public override bool YieldFrame {get => false;}
+	
 	public Doorway d1 {get; private set;}
 	public Doorway d2 {get; private set;}
 	public (Doorway d1, Doorway d2) Doorways {get {return (d1,d2);}}
@@ -371,6 +375,8 @@ public class GameMap : MonoBehaviour {
 		} else if (action is DisconnectAction dc) {
 			dc.d1.Disconnect();
 			this.RemoveExtraConnection(dc.d1);
+		} else if (action.GetType() == typeof(GenerationAction)) {
+			// noop
 		} else {
 			return false;
 		}
@@ -383,7 +389,9 @@ public class GameMap : MonoBehaviour {
 			if (!this.PerformAction(action)) {
 				throw new InvalidOperationException($"Unknown GenerationAction: {action}");
 			}
-			yield return null;
+			if (action.YieldFrame) {
+				yield return null;
+			}
 		}
 		GenerationCompleteEvent?.Invoke(this);
 	}
