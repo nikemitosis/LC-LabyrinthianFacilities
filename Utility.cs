@@ -99,7 +99,7 @@ public static class SerializationHelper {
 	}
 }
 
-public class WeightedList<T> : IEnumerable<T> {
+public class WeightedList<T> : IEnumerable<T>, ICollection<T> {
 	
 	public sealed class ItemEnumerator : IEnumerator<T> {
 		
@@ -124,16 +124,33 @@ public class WeightedList<T> : IEnumerable<T> {
 		}
 	}
 	
+	public struct Entry {
+		public T item;
+		public float weight;
+		
+		public Entry(T item, float weight) {
+			this.item = item;
+			this.weight = weight;
+		}
+		
+		public void Deconstruct(out T item, out float weight) {
+			item = this.item;
+			weight = this.weight;
+		}
+	}
+	
 	public float SummedWeight {get {return summedWeight;}}
 	
-	private List<T> items;
-	private List<float> weights;
-	private float summedWeight;
+	protected List<T> items;
+	protected List<float> weights;
+	protected float summedWeight;
 	
-	public int Count {get {return items.Count;}}
-	public virtual IEnumerable<(T item, float weight)> Entries {get {
+	public int Count {get => items.Count;}
+	public virtual bool IsReadOnly {get => false;}
+	
+	public virtual IEnumerable<Entry> Entries {get {
 		for (int i=0; i<items.Count; i++) {
-			yield return (items[i], weights[i]);
+			yield return new Entry(items[i], weights[i]);
 		}
 	}}
 	
@@ -141,6 +158,15 @@ public class WeightedList<T> : IEnumerable<T> {
 		items = new();
 		weights = new();
 		summedWeight = 0.0f;
+	}
+	public WeightedList(WeightedList<T> copyFrom) {
+		items = new(copyFrom.Count);
+		weights = new(copyFrom.Count);
+		summedWeight = copyFrom.summedWeight;
+		foreach ((T item,float weight) in copyFrom.Entries) {
+			items.Add(item);
+			weights.Add(weight);
+		}
 	}
 	
 	public virtual bool Validate() {
@@ -153,18 +179,19 @@ public class WeightedList<T> : IEnumerable<T> {
 		return true;
 	}
 	
-	public virtual void Add(T item, float weight=1.0f) {
-		if (weight <= 0.0f) {
-			throw new ArgumentException($"Cannot use weight <= 0.0 (was given {weight})");
-		}
+	public void Add(T item) {Add(item,1.0f);}
+	public virtual bool Add(T item, float weight) {
+		if (weight <= 0.0f) return false;
 		this.items.Add(item);
 		this.weights.Add(weight);
 		summedWeight += weight;
+		return true;
 	}
 	
 	public virtual void Clear() {
 		items.Clear();
 		weights.Clear();
+		summedWeight = 0.0f;
 	}
 	
 	public virtual bool Contains(T item) {
@@ -200,18 +227,46 @@ public class WeightedList<T> : IEnumerable<T> {
 		}
 	}
 	
+	public Entry GetByIndex(int index) {
+		try {
+			return new Entry(items[index], weights[index]);
+		} catch (ArgumentOutOfRangeException) {
+			throw;
+		}
+	}
+	
+	public virtual void SetWeightByIndex(int index, float weight) {
+		if (index >= Count) throw new ArgumentOutOfRangeException($"index >= Count ({index} >= {Count})");
+		if (weight <= 0.0f) throw new ArgumentException($"Cannot use weight <= 0.0 (was given {weight})");
+		
+		summedWeight += weight - weights[index];
+		this.weights[index] = weight;
+	}
+	public virtual void SetItemByIndex(int index, T item) {
+		if (index >= Count) throw new ArgumentOutOfRangeException($"index >= Count ({index} >= {Count})");
+		
+		this.items[index] = item;
+	}
+	
+	public int InternalIndex(float index) {
+		if (index == summedWeight) return Count-1;
+		
+		for (int idx=0; idx<Count; idx++) {
+			index -= weights[idx];
+			if (index < 0) return idx;
+		}
+		return -1;
+	}
+	
 	public virtual T this[float index] { get {
 		if (index < 0.0f || index > summedWeight || summedWeight == 0) {
 			throw new ArgumentOutOfRangeException(
 				$"Index out of range ({index}, list size is {this.summedWeight})"
 			);
 		}
-		if (index == summedWeight) return items[^1];
 		
-		for (int idx=0; idx<Count; idx++) {
-			index -= weights[idx];
-			if (index < 0) return items[idx];
-		}
+		int idx = InternalIndex(index);
+		if (idx != -1) return items[idx];
 		
 		throw new ArgumentOutOfRangeException(
 			$"Index out of range ({index}, list size is {this.summedWeight})"
@@ -224,5 +279,181 @@ public class WeightedList<T> : IEnumerable<T> {
 			throw new ArgumentOutOfRangeException($"Item {item} not in list");
 		}
 		return weights[idx];
+	} set {
+		int idx = items.IndexOf(item);
+		if (idx == -1) {
+			throw new ArgumentOutOfRangeException($"Item {item} not in list");
+		}
+		SetWeightByIndex(idx,value);
 	}}
+}
+
+public interface IChoice<TItem,TIndex> : ICollection<TItem> {
+	public int OpenCount {get;}
+	public int ClosedCount {get;}
+	
+	public TIndex OpenWidth {get;}
+	public TIndex ClosedWidth {get;}
+	
+	public TItem Yield(TIndex idx);
+	public void Reset();
+}
+
+public class ChoiceList<T> : IChoice<T,int> {
+	
+	public int Count {get => contents.Length;}
+	
+	public int OpenCount   {get; private set;}
+	public int ClosedCount {get; private set;}
+	public int OpenWidth   {get => OpenCount;}
+	public int ClosedWidth {get => ClosedCount;}
+	
+	public bool IsReadOnly {get => true;}
+	
+	protected T[] contents;
+	
+	
+	public ChoiceList(ICollection<T> source) {
+		ClosedCount = 0;
+		
+		contents = new T[source.Count];
+		foreach (T item in source) {
+			contents[OpenCount++] = item;
+		}
+		
+	}
+	
+	public T Yield(int idx) {
+		if (idx >= OpenCount) throw new ArgumentOutOfRangeException();
+		
+		T rt = contents[idx];
+		
+		OpenCount--;
+		ClosedCount++;
+		
+		contents[idx] = contents[^ClosedCount];
+		contents[^ClosedCount] = rt;
+		
+		return rt;
+	}
+	
+	public void Reset() {
+		OpenCount = Count;
+		ClosedCount = 0;
+	}
+	
+	public bool Contains(T item) => ((IList<T>)contents).Contains(item);
+	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+	public IEnumerator<T> GetEnumerator() => ((IEnumerable<T>)contents).GetEnumerator();
+	
+	public void Add(T item) => throw new NotImplementedException();
+	public void Clear() => throw new NotImplementedException();
+	public void CopyTo(T[] arr, int startIdx) => throw new NotImplementedException();
+	public bool Remove(T item) => throw new NotImplementedException();
+}
+
+public class WeightedChoiceList<T> : WeightedList<T>, IChoice<T,float> {
+	public int OpenCount {get; protected set;}
+	public int ClosedCount {get; protected set;}
+	
+	public float OpenWidth {get; protected set;}
+	public float ClosedWidth {get; protected set;}
+	
+	public WeightedChoiceList() : base() {
+		OpenCount = 0;
+		ClosedCount = 0;
+		OpenWidth = 0.0f;
+		ClosedWidth = 0.0f;
+	}
+	public WeightedChoiceList(WeightedList<T> w) : base(w) {
+		OpenCount = Count;
+		ClosedCount = 0;
+		OpenWidth = SummedWeight;
+		ClosedWidth = 0.0f;
+	}
+	
+	public override void Clear() {
+		base.Clear();
+		this.OpenCount = this.ClosedCount = 0;
+		this.OpenWidth = this.ClosedWidth = 0;
+	}
+	
+	public override bool Validate() {
+		return base.Validate() && OpenCount+ClosedCount == Count;
+	}
+	
+	public override bool Add(T item, float weight) {
+		if (!base.Add(item,weight)) return false;
+		OpenCount++;
+		OpenWidth += weight;
+		return true;
+	}
+	
+	public override bool Remove(T item, out float weight) {
+		int idx = this.items.IndexOf(item);
+		bool rt = base.Remove(item,out weight);
+		
+		if (!rt) return false;
+		
+		if (idx >= OpenCount) {
+			ClosedCount--;
+			ClosedWidth -= weight;
+		} else {
+			OpenCount--;
+			OpenWidth -= weight;
+		}
+		
+		return true;
+	}
+	
+	public override void SetWeightByIndex(int index, float weight) {
+		float oldWeight;
+		try {
+			oldWeight = this.weights[index];
+			base.SetWeightByIndex(index,weight);
+		} catch (ArgumentException) {
+			throw;
+		}
+		
+		if (index < OpenCount) {
+			OpenWidth += weight - oldWeight;
+		} else {
+			ClosedWidth += weight - oldWeight;
+		}
+	}
+	
+	public T Yield(float index) {
+		int idx;
+		if (index == OpenWidth) {
+			idx = OpenCount-1;
+		} else {
+			idx = InternalIndex(index);
+		}
+		
+		if (idx == -1 || idx >= OpenCount) {
+			throw new ArgumentOutOfRangeException($"index out of range (gave {index}, length {OpenWidth})");
+		}
+		T rt = this.items[idx];
+		float w = this.weights[idx];
+		
+		OpenCount--;
+		ClosedCount++;
+		OpenWidth -= w;
+		ClosedWidth += w;
+		this.items  [idx] = this.items  [OpenCount];
+		this.weights[idx] = this.weights[OpenCount];
+		
+		this.items  [OpenCount] = rt;
+		this.weights[OpenCount] = w;
+		
+		return rt;
+	}
+	
+	public void Reset() {
+		OpenCount = Count;
+		ClosedCount = 0;
+		
+		OpenWidth = SummedWeight;
+		ClosedWidth = 0.0f;
+	}
 }

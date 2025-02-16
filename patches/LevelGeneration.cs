@@ -1,3 +1,5 @@
+#define SETSEED
+
 namespace LabyrinthianFacilities.Patches;
 using DgConversion;
 
@@ -11,12 +13,14 @@ using UnityEngine;
 using DunGen;
 
 using Object=UnityEngine.Object;
+using Tile=LabyrinthianFacilities.Tile;
+using Doorway=LabyrinthianFacilities.Doorway;
 
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
 	
 	#if SETSEED
-	public static int SetSeed = 1860430165;
+	public static int SetSeed = 150997470;
 	#endif
 	
 	[HarmonyPatch("Generate")]
@@ -52,6 +56,49 @@ class GenerateLevel {
 	[HarmonyPatch("ChangeStatus")]
 	public static void ChangeStatus(object instance, GenerationStatus status) {
 		throw new NotImplementedException("Reverse patch stub");
+	}
+}
+
+// Mostly blatantly stolen from decompiled LC code
+[HarmonyPatch(typeof(RoundManager))]
+public class AddCaveLights {
+	[HarmonyPrefix]
+	[HarmonyPatch("SpawnCaveDoorLights")]
+	public static void SpawnCaveDoorLights(RoundManager __instance) {
+		if (__instance.currentDungeonType != 4) {
+			return;
+		}
+		
+		Tile[] array = UnityEngine.Object.FindObjectsByType<Tile>(FindObjectsSortMode.None);
+		for (int i = 0; i < array.Length; i++) {
+			
+			if (!array[i].GetComponent<DunGen.Tile>().Tags.HasTag(__instance.MineshaftTunnelTag)) continue;
+			
+			for (int j = 0; j < array[i].Doorways.Length; j++) {
+				Doorway doorway = array[i].Doorways[j];
+				if (doorway.IsVacant) continue;
+				DunGen.Doorway dungenDoorway = doorway.GetComponent<DunGen.Doorway>();
+				DunGen.Doorway connection = doorway.Connection.GetComponent<DunGen.Doorway>();
+				if (!connection.Tags.HasTag(__instance.CaveDoorwayTag)) continue;
+				
+				
+				var obj = UnityEngine.Object.Instantiate(
+					__instance.caveEntranceProp, 
+					doorway.transform, 
+					worldPositionStays: false
+				);
+				((DGameMap)array[0].Map).CaveLights.Add(obj);
+				
+				Transform[] componentsInChildren = array[i].GetComponentsInChildren<Transform>();
+				foreach (Transform transform in componentsInChildren) {
+					if (transform.tag == "PoweredLight") {
+						transform.gameObject.SetActive(false);
+					}
+				}
+			}
+		}
+		
+		return;
 	}
 }
 

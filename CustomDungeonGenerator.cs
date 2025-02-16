@@ -5,6 +5,7 @@ using Serialization;
 using Util;
 
 using System;
+using System.Runtime.CompilerServices;
 using System.Collections;
 using System.Collections.Generic;
 
@@ -16,12 +17,370 @@ using Unity.Netcode;
 // Ambiguity between System.Random and UnityEngine.Random
 using Random = System.Random;
 
+public interface IDoorwayManager : ICollection<Doorway> {
+	public IChoice<Doorway,    float>  GetLeaves               (Func<Doorway,   float> weightFunction);
+	public IChoice<Connection, float>  GetPotentialConnections (Func<Connection,float> weightFunction);
+	public IChoice<Connection, float>  GetActiveConnections    (Func<Connection,float> weightFunction);
+}
+
+// Does not support doorways being moved after they have been added
+// Worst case, you can remove and readd them
+public class DoorwayManager : IDoorwayManager {
+	
+	public enum DoorType {
+		LEAF,
+		ACTIVE_CONNECTOR,
+		POTENTIAL_CONNECTOR,
+		FALSE_POTENTIAL_CONNECTOR
+	}
+	
+	// <External>
+	protected GameMap map;
+	public GameMap Map {get => map;}
+	public virtual BoundsMap<Tile> BoundsMap {get => Map.BoundsMap;}
+	// </External>
+	
+	// <Metadata>
+	public int Count {get => doorways.Count;}
+	public virtual bool IsReadOnly {get => false;}
+	// </Metadata>
+	
+	// <Parameters>
+	
+	// Overly precise positions lead to leaves that *could* overlap not overlapping
+	// 0 => round to nearest 1.00f, 1 => 0.50f, 2 => 0.25f, etc.
+	// values above 31 are invalid due to the implementation of LeafPrecision, unless overridden
+	public virtual byte DoorPosPrecision {get => 3;}
+	public virtual float DoorPrecision {get => 1.0f / (1 << (int)DoorPosPrecision);}
+	
+	// Must be >0.0f
+	protected virtual float clearancePrecision {get => 1f;}
+	// Should be >clearancePrecision
+	protected virtual float maxClearance {get => clearancePrecision * 256f;}
+	
+	// </Parameters>
+	
+	// <Data>
+	private Dictionary<Doorway, DoorType> doorways;
+	
+	private Dictionary<Vector3,Doorway> leaves;
+	private HashSet<Connection> activeConnections;
+	private Dictionary<Vector3,Connection> potentialConnections;
+	private Dictionary<Vector3,Connection> falsePotentialConnections;
+	// </Data>
+	
+	
+	// yes this is circumventable with a cast. Probably dont do that?
+	public IReadOnlyCollection<Doorway>    Leaves {get => leaves.Values;}
+	public IReadOnlyCollection<Connection> ActiveConnections {get => activeConnections;}
+	public IReadOnlyCollection<Connection> PotentialConnections {get => potentialConnections.Values;}
+	public IReadOnlyCollection<Connection> FalsePotentialConnections {get => falsePotentialConnections.Values;}
+	
+	public DoorwayManager(GameMap map) {
+		this.map = map;
+		
+		doorways = new();
+		leaves = new();
+		activeConnections = new();
+		potentialConnections = new();
+		falsePotentialConnections = new();
+	}
+	
+	public bool Validate() {
+		foreach (var entry in doorways) {
+			Doorway d = entry.Key;
+			if (d == null) return false;
+			DoorType dt = entry.Value;
+			Vector3 pos = ApproxPosition(d);
+			switch (dt) {
+				case DoorType.LEAF:
+					if (!leaves.TryGetValue(pos,out Doorway e) || d != e) return false;
+				break; case DoorType.ACTIVE_CONNECTOR:
+					if (!activeConnections.Contains(new Connection(d,d.Connection))) return false;
+				break; case DoorType.POTENTIAL_CONNECTOR:
+					if (
+						!potentialConnections.TryGetValue(pos,out Connection c) 
+						|| (c.d1 != d && c.d2 != d)
+					) return false;
+				break; case DoorType.FALSE_POTENTIAL_CONNECTOR:
+					if (
+						!falsePotentialConnections.TryGetValue(pos,out c)
+						|| (c.d1 != d && c.d2 != d)
+					) return false;
+				break; default:
+					return false;
+				// break;
+			}
+		}
+		return true;
+	}
+	
+	protected virtual void UnsetDoorway(Doorway d,Vector3 approxPos=default) {
+		if (!doorways.TryGetValue(d,out DoorType dt)) return;
+		if (approxPos == default) approxPos = ApproxPosition(d);
+		switch (dt) {
+			case DoorType.LEAF:
+				if (
+					!leaves.Remove(approxPos,out Doorway door)
+					|| door != d
+				) throw new InvalidOperationException(
+					$"Desync between leaves and doorways"
+				);
+			break; case DoorType.ACTIVE_CONNECTOR:
+				activeConnections.Remove(new Connection(d,d.Connection));
+			break; case DoorType.POTENTIAL_CONNECTOR:
+				if (
+					potentialConnections.Remove(approxPos,out Connection con) 
+					&& (con.d1 != d && con.d2 != d)
+				) throw new InvalidOperationException(
+					$"Desync between potentialConnections and doorways"
+				);
+			break; case DoorType.FALSE_POTENTIAL_CONNECTOR:
+				if (
+					falsePotentialConnections.Remove(approxPos, out con)
+					&& (con.d1 != d && con.d2 != d)
+				) throw new InvalidOperationException(
+					$"Desync between falsePotentialConnections and doorways"
+				);
+			break;
+		}
+	}
+	
+	protected virtual void SetLeaf(Doorway d, Vector3 approxPos=default) {
+		if (approxPos == default) approxPos = ApproxPosition(d);
+		UnsetDoorway(d);
+		doorways[d] = DoorType.LEAF;
+		leaves.Add(approxPos,d);
+	}
+	
+	protected virtual void SetActiveConnector(Doorway d) {
+		UnsetDoorway(d);
+		UnsetDoorway(d.Connection);
+		doorways[d] = DoorType.ACTIVE_CONNECTOR;
+		if (doorways.ContainsKey(d.Connection)) doorways[d.Connection] = DoorType.ACTIVE_CONNECTOR;
+		// activeConnections is hashset, no need to worry about duplicates
+		activeConnections.Add(new Connection(d,d.Connection));
+	}
+	
+	protected virtual void SetPotentialConnection(Connection c,Vector3 approxPos=default) {
+		if (approxPos == default) approxPos = ApproxPosition(c.d1);
+		UnsetDoorway(c.d1);
+		UnsetDoorway(c.d2);
+		if (c.d1.Fits(c.d2)) {
+			doorways[c.d1] = DoorType.POTENTIAL_CONNECTOR;
+			if (doorways.ContainsKey(c.d2)) doorways[c.d2] = DoorType.POTENTIAL_CONNECTOR;
+			potentialConnections.Add(approxPos,c);
+		} else {
+			doorways[c.d1] = DoorType.FALSE_POTENTIAL_CONNECTOR;
+			if (doorways.ContainsKey(c.d2)) doorways[c.d2] = DoorType.FALSE_POTENTIAL_CONNECTOR;
+			falsePotentialConnections.Add(approxPos,c);
+		}
+	}
+	
+	public void Add(Doorway d) {
+		if (d == null) {
+			Debug.LogException(new ArgumentNullException("Doorway d"));
+			return;
+		}
+		if (Contains(d)) return;
+		Subscribe(d);
+		if (d.IsVacant) {
+			Vector3 approxPos = ApproxPosition(d);
+			if (leaves.TryGetValue(approxPos, out Doorway other)) {
+				SetPotentialConnection(new Connection(d,other),approxPos);
+			} else {
+				SetLeaf(d,approxPos);
+			}
+		} else {
+			SetActiveConnector(d);
+		}
+	}
+	
+	private void RemoveAction(Doorway d) => Remove(d);
+	public bool Remove(Doorway d) {
+		if (!doorways.ContainsKey(d)) return false;
+		Unsubscribe(d);
+		switch (doorways[d]) {
+			case DoorType.LEAF:
+				if (!leaves.Remove(ApproxPosition(d), out Doorway e) || d != e) {
+					Debug.LogWarning(
+						"DoorwayManager: Desync between doorways and leaves, this *will* become a problem"
+					);
+				}
+			break; case DoorType.ACTIVE_CONNECTOR:
+				if (!Contains(d.Connection)) {
+					activeConnections.Remove(new Connection(d,d.Connection));
+				}
+			break; case DoorType.POTENTIAL_CONNECTOR:
+				potentialConnections.Remove(ApproxPosition(d),out Connection con);
+				Doorway other = con.GetOther(d);
+				if (Contains(other)) {
+					SetLeaf(other);
+				}
+			break; case DoorType.FALSE_POTENTIAL_CONNECTOR:
+				falsePotentialConnections.Remove(ApproxPosition(d),out con);
+				other = con.GetOther(d);
+				if (Contains(other)) {
+					SetLeaf(other);
+				}
+			break;
+		}
+		doorways.Remove(d);
+		
+		return true;
+	}
+	
+	public bool Contains(Doorway d) => doorways.ContainsKey(d);
+	
+	public virtual void Clear() {
+		doorways.Clear();
+		leaves.Clear();
+		activeConnections.Clear();
+		potentialConnections.Clear();
+		falsePotentialConnections.Clear();
+	}
+	
+	IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+	public IEnumerator<Doorway> GetEnumerator() => this.doorways.Keys.GetEnumerator();
+	
+	public void CopyTo(Doorway[] arr, int startIdx) => throw new NotImplementedException();
+	
+	protected virtual void Subscribe(Doorway d) {
+		d.OnDestroyEvent    += RemoveAction;
+		d.OnDisconnectEvent += DisconnectDoor;
+		d.OnConnectEvent    += ConnectDoor;
+	}
+	protected virtual void Unsubscribe(Doorway d) {
+		d.OnDestroyEvent    -= RemoveAction;
+		d.OnDisconnectEvent -= DisconnectDoor;
+		d.OnConnectEvent    -= ConnectDoor;
+	}
+	
+	public virtual Vector3 ApproxPosition(Doorway door) {
+		if (door == null) {
+			throw new NullReferenceException($"Cannot get the position of a destroyed doorway. ");
+		}
+		Vector3 pos = door.transform.position;
+		// coord ~= LeafPrecision * a  for some int a
+		// coord / LeafPrecision ~= a
+		// a = (int)((coord / LeafPrecision)+0.5f)
+		// ^(add 0.5f to round in both directions instead of always rounding down)
+		// rounded = LeafPrecision * (int)((coord / LeafPrecision)+0.5f)
+		return new Vector3(
+			DoorPrecision * (int)((pos.x / DoorPrecision)+0.5f),
+			DoorPrecision * (int)((pos.y / DoorPrecision)+0.5f),
+			DoorPrecision * (int)((pos.z / DoorPrecision)+0.5f)
+		);
+	}
+	
+	public virtual float ClearanceRadius(Doorway d) {
+		float radius = clearancePrecision;
+		Bounds bounds;
+		while (true) {
+			bounds = new Bounds(
+				d.transform.position + radius*d.transform.forward, 
+				2*radius*Vector3.one
+			);
+			if (BoundsMap.Intersects(bounds)) break;
+			radius *= 2.0f;
+			if (radius >= maxClearance) break;
+		}
+		return radius;
+	}
+	
+	public IChoice<Doorway,float> GetLeaves(Func<Doorway,float> weightFunc) {
+		WeightedChoiceList<Doorway> rt = new();
+		foreach (Doorway d in leaves.Values) {
+			rt.Add(d,weightFunc(d));
+		}
+		return rt;
+	}
+	
+	public IChoice<Connection,float> GetActiveConnections(Func<Connection,float> weightFunc) {
+		WeightedChoiceList<Connection> rt = new();
+		foreach (Connection c in activeConnections) {
+			rt.Add(c,weightFunc(c));
+		}
+		return rt;
+	}
+	
+	public IChoice<Connection,float> GetPotentialConnections(Func<Connection,float> weightFunc) {
+		WeightedChoiceList<Connection> rt = new();
+		foreach (Connection c in potentialConnections.Values) {
+			rt.Add(c,weightFunc(c));
+		}
+		return rt;
+	}
+	
+	public void DisconnectDoor(Doorway d) {
+		if (leaves.TryGetValue(ApproxPosition(d),out Doorway other)) {
+			SetPotentialConnection(new Connection(d,other));
+		} else {
+			SetLeaf(d);
+		}
+	}
+	
+	public void ConnectDoor(Doorway d1, Doorway d2) {
+		SetActiveConnector(d1);
+	}
+}
+
+public struct Connection : IEquatable<Connection>, IEquatable<ITuple> {
+	public Doorway d1;
+	public Doorway d2;
+	
+	public Connection(Doorway d1, Doorway d2) {
+		this.d1 = d1;
+		this.d2 = d2;
+	}
+	
+	public Doorway GetOther(Doorway d) {
+		if (d != d1 && d != d2) throw new ArgumentException(
+			"Doorway expected to be one of the doorways in the connection"
+		);
+		return d == d1 ? d2 : d1;
+	}
+	
+	public void Deconstruct(out Doorway d1, out Doorway d2) {
+		d1 = this.d1;
+		d2 = this.d2;
+	}
+	public override bool Equals(object other) {
+		if (other is ITuple tup) {
+			return Equals(tup);
+		} else if (other is Connection con) {
+			return Equals(con);
+		} else {
+			return false;
+		}
+	}
+	public bool Equals(Connection con) {
+		var (od1, od2) = con;
+		return (d1 == od1 && d2 == od2) || (d1 == od2 && d2 == od1);
+	}
+	public bool Equals(ITuple tup) {
+		if (tup.Length != 2) return false;
+		Doorway od1,od2;
+		try {
+			od1 = (Doorway)tup[0];
+			od2 = (Doorway)tup[1];
+		} catch (InvalidCastException) {
+			return false;
+		}
+		return (d1 == od1 && d2 == od2) || (d1 == od2 && d2 == od1);
+	}
+	
+	public override int GetHashCode() {
+		return d1.GetHashCode() ^ d2.GetHashCode();
+	}
+}
+
 public class Doorway : MonoBehaviour {
 	// Events
 	// OnDestroy invokes OnDisconnectEvent first (if applicable), then OnDestroyEvent
-	public event Action<Doorway> OnDisconnectEvent;
-	public event Action<Doorway> OnDestroyEvent;
-	public event Action<Doorway,Doorway> OnConnectEvent;
+	public event Action<Doorway> OnDisconnectEvent; // occurs before disconnection
+	public event Action<Doorway> OnDestroyEvent; // as with OnDestroy, occurs before destruction
+	public event Action<Doorway,Doorway> OnConnectEvent; // occurs *after* connection
 	
 	// Properties
 	public Tile Tile {get {
@@ -69,22 +428,22 @@ public class Doorway : MonoBehaviour {
 		this.connection = other;
 		other.connection = this;
 		this.OnConnectEvent?.Invoke(this,other);
-		this.OnConnectEvent?.Invoke(other,this);
+		other.OnConnectEvent?.Invoke(other,this);
 	}
 	
 	public void Disconnect() {
 		if (this.connection == null) return;
+		this.OnDisconnectEvent?.Invoke(this);
 		var con = this.connection;
 		this.connection = null;
 		con.Disconnect();
-		this.OnDisconnectEvent?.Invoke(this);
 	}
 }
 
 public class Tile : MonoBehaviour {
 	// Properties
 	public bool Initialized {
-		get { return initialized; }
+		get => initialized;
 		protected set { initialized = value; }
 	}
 	
@@ -99,13 +458,16 @@ public class Tile : MonoBehaviour {
 		}
 	}
 	
-	public bool IsPrefab {get {return !this.gameObject.scene.IsValid();}}
+	public bool IsPrefab {get => !this.gameObject.scene.IsValid();}
 	
 	public Doorway[] Doorways {
-		get {return this.doorways ??= this.GetComponentsInChildren<Doorway>();}
+		get => this.doorways ??= this.GetComponentsInChildren<Doorway>();
 	}
-	public Bounds BoundingBox {get {return this.bounding_box;}}
-	public GameMap Map {get {return this.GetComponentInParent<GameMap>(true);}}
+	public Bounds LooseBoundingBox {
+		get => new Bounds(BoundingBox.center, BoundingBox.size - 2*intersection_tolerance*Vector3.one);
+	}
+	public Bounds BoundingBox {get => this.bounding_box;}
+	public GameMap Map {get => this.GetComponentInParent<GameMap>(true);}
 	
 	// Protected/Private
 	protected Doorway[] doorways = null;
@@ -130,7 +492,7 @@ public class Tile : MonoBehaviour {
 		return;
 	}
 	
-	public static float intersection_tolerance = 1f/8;
+	public static float intersection_tolerance = 5f/8;
 	public bool Intersects(Tile other) {
 		var tbb = this.bounding_box;
 		var obb = other.bounding_box;
@@ -155,7 +517,7 @@ public class Tile : MonoBehaviour {
 		return tbb.Intersects(obb) && obb.size != Vector3.zero && tbb.size != Vector3.zero;
 	}
 	
-	// WARNING: Bounding box increases *permanantly* with most calls. This should really only be 
+	// WARNING: Bounding box increases *permanantly* with certain calls. This should really only be 
 	// called once per tile. Should eventually move away from AABB anyway... 
 	// the only exception to this warning is 90x degree rotations
 	public void RotateBy(Quaternion quat) {
@@ -186,6 +548,15 @@ public class Tile : MonoBehaviour {
 				$"Door index of new tile out of range. Tried to select idx {thisDoorwayIdx} with only {this.Doorways.Length} doors. "
 			);
 		}
+		if (this == null) {
+			throw new ArgumentNullException($"Cannot place a tile that is being destroyed");
+		}
+		if (other == null) {
+			throw new ArgumentNullException($"No doorway provided to connect to");
+		}
+		if (other.Tile.Map == null) {
+			throw new ArgumentException($"Tile must connect to a doorway that is placed within a map");
+		}
 		
 		Transform oldParent = this.transform.parent;
 		this.transform.parent = other.transform;
@@ -207,12 +578,11 @@ public class Tile : MonoBehaviour {
 		this.MoveTo(
 			other.transform.position - doorLocalPos
 		);
-		foreach (Tile t in this.Map.GetComponentsInChildren<Tile>()) {
-			if (this.Intersects(t) && !object.ReferenceEquals(t,this)) {
-				this.transform.SetParent(oldParent);
-				return false;
-			}
+		if (!this.Map.VerifyTilePlacement(this)) {
+			this.transform.SetParent(oldParent);
+			return false;
 		}
+		
 		thisDoorway.Connect(other);
 		return true;
 	}
@@ -236,9 +606,9 @@ public class Tile : MonoBehaviour {
 	}
 }
 
-public class GenerationAction {
-	public virtual bool YieldFrame {get => true;}
-}
+public abstract class GenerationAction {}
+
+public class YieldFrame : GenerationAction {}
 
 public class PlacementInfo : GenerationAction {
 	private Tile newtile;
@@ -262,10 +632,10 @@ public class PlacementInfo : GenerationAction {
 		}
 	}
 	
-	public PlacementInfo(Tile nt, int ndi=0, Doorway ap=null) {
-		newtile = nt;
-		newDoorwayIdx = ndi;
-		attachmentPoint = ap;
+	public PlacementInfo(Tile newTile, int newDoorwayIdx=0, Doorway attachmentPoint=null) {
+		this.newtile = newTile;
+		this.newDoorwayIdx = newDoorwayIdx;
+		this.attachmentPoint = attachmentPoint;
 	}
 }
 
@@ -279,8 +649,6 @@ public class RemovalInfo : GenerationAction {
 }
 
 public abstract class ConnectionAction : GenerationAction {
-	public override bool YieldFrame {get => false;}
-	
 	public Doorway d1 {get; private set;}
 	public Doorway d2 {get; private set;}
 	public (Doorway d1, Doorway d2) Doorways {get {return (d1,d2);}}
@@ -304,10 +672,6 @@ public class DisconnectAction : ConnectionAction {
 
 public interface ITileGenerator {
 	public IEnumerable<GenerationAction> Generator(GameMap map);
-	
-	public void FailedPlacementHandler(Tile tile) {
-		return;
-	}
 }
 
 public class GameMap : MonoBehaviour {
@@ -323,35 +687,31 @@ public class GameMap : MonoBehaviour {
 	
 	// Properties
 	public Tile RootTile {
-		get {return rootTile;} 
+		get => rootTile;
 		protected set {rootTile=value;}
 	}
+	public int TileCount {get => this.GetComponentsInChildren<Tile>().Length;}
+	public BoundsMap<Tile> BoundsMap {get => boundsMap; private set => boundsMap = value;}
 	
-	protected virtual float LeafPrecision {get {return 1.0f / (1 << (int)leafPosPrecision);}}
+	public virtual IDoorwayManager DoorwayManager {get; protected set;} = null;
 	
 	// Protected/Private
 	protected Tile rootTile;
 	
-	private Dictionary<Vector2,List<Doorway>> leaves;
-	private Dictionary<Vector3,List<Doorway>> leavesByPos;
-	// if extraConnections[d1] = d2, d2 should not be a key in extraConnections, and d1 should not be a value
-	private Dictionary<Doorway,Doorway> extraConnections;
-	// Overly precise positions lead to leaves that *could* overlap not overlapping
-	// 0 => round to nearest 1.00f
-	// 1 => round to nearest 0.50f
-	// 2 => round to nearest 0.25f, etc.
-	// values above 31 are invalid due to the implementation of LeafPrecision, unless overridden
-	public byte leafPosPrecision {get; set;} = 3;
+	private BoundsMap<Tile> boundsMap;
 	
-	private int numLeaves = 0;
 	protected NavMeshSurface navSurface;
 	
 	// MonoBehaviour Stuff
 	protected virtual void Awake() {
 		this.rootTile = null;
-		this.leaves = new Dictionary<Vector2,List<Doorway>>();
-		this.leavesByPos = new();
-		this.extraConnections = new();
+		if (this.DoorwayManager == null) this.DoorwayManager = new DoorwayManager(this);
+		
+		this.boundsMap = new BoundsMap<Tile>(
+			center: Vector3.zero,
+			radius: 1024f,
+			itemBounds: (Tile t) => t.LooseBoundingBox
+		);
 		
 		this.navSurface = this.gameObject.AddComponent<NavMeshSurface>();
 		this.navSurface.collectObjects = CollectObjects.Children;
@@ -368,15 +728,13 @@ public class GameMap : MonoBehaviour {
 			this.TileInsertionEvent?.Invoke(this.AddTile(placement));
 		} else if (action is RemovalInfo removal) {
 			this.RemoveTile(removal);
-		} else if (action is ConnectAction connection)  {
+		} else if (action is ConnectAction connection) {
 			(Doorway d1, Doorway d2) = connection.Doorways;
-			this.extraConnections.Add(d1,d2);
 			d1.Connect(d2);
 		} else if (action is DisconnectAction dc) {
 			dc.d1.Disconnect();
-			this.RemoveExtraConnection(dc.d1);
-		} else if (action.GetType() == typeof(GenerationAction)) {
-			// noop
+		} else if (action is YieldFrame) {
+			// noop here
 		} else {
 			return false;
 		}
@@ -389,100 +747,48 @@ public class GameMap : MonoBehaviour {
 			if (!this.PerformAction(action)) {
 				throw new InvalidOperationException($"Unknown GenerationAction: {action}");
 			}
-			if (action.YieldFrame) {
+			if (action is YieldFrame) {
 				yield return null;
 			}
 		}
 		GenerationCompleteEvent?.Invoke(this);
 	}
 	
-	private void RemoveExtraConnection(Doorway d) {
-		this.extraConnections.Remove(d);
+	protected void AddDoorway(Doorway d) {
+		if (d == null) {
+			Debug.LogError($"Cannot add null doorway to {this.GetType().Name}. Is it destroyed?",this);
+			return;
+		}
+		DoorwayManager.Add(d);
 	}
 	
-	public IList<Doorway> GetLeaves(Vector2 size) {
-		if (!this.leaves.TryGetValue(size, out List<Doorway> ds)) return null;
-		return ds.Count == 0 ? null : ds.AsReadOnly();
-	}
-	
-	public IEnumerable<IList<Doorway>> GetOverlappingLeaves() {
-		foreach (var entry in this.leavesByPos) {
-			if (entry.Value.Count > 1) yield return entry.Value.AsReadOnly();
-		}
-	}
-	public IEnumerable<(Doorway d1, Doorway d2)> GetExtraConnections() {
-		foreach (var entry in this.extraConnections) {
-			yield return (entry.Key,entry.Value);
-		}
-	}
-	
-	protected Vector3 LeafPosition(Doorway leaf) {
-		if (leaf == null) {
-			throw new NullReferenceException($"Cannot get the position of a destroyed leaf doorway. ");
-		}
-		Vector3 pos = leaf.transform.position;
-		// coord ~= LeafPrecision * a  for some int a
-		// coord / LeafPrecision ~= a
-		// a = (int)((coord / LeafPrecision)+0.5f)
-		// ^(add 0.5f to round in both directions instead of always rounding down)
-		// rounded = LeafPrecision * (int)((coord / LeafPrecision)+0.5f)
-		return new Vector3(
-			LeafPrecision * (int)((pos.x / LeafPrecision)+0.5f),
-			LeafPrecision * (int)((pos.y / LeafPrecision)+0.5f),
-			LeafPrecision * (int)((pos.z / LeafPrecision)+0.5f)
-		);
-	}
-	
-	public void AddLeaf(Doorway d) {
-		if (d == null) return;
-		
-		List<Doorway> leaves;
-		if (!this.leaves.TryGetValue(d.Size, out leaves)) {
-			leaves = new List<Doorway>();
-			this.leaves.Add(d.Size,leaves);
-		}
-		if (leaves.Contains(d)) Debug.LogError($"Duplicate leaf {d.Tile.name}.{d.name}", this);
-		leaves.Add(d);
-		
-		Vector3 leafpos = LeafPosition(d);
-		if (!this.leavesByPos.TryGetValue(leafpos, out leaves)) {
-			leaves = new(2);
-			this.leavesByPos.Add(leafpos,leaves);
-		}
-		if (leaves.Contains(d)) Debug.LogError($"Duplicate leaf pos {d.Tile.name}.{d.name}", this);
-		leaves.Add(d);
-		
-		numLeaves++;
-	}
-	
-	public void RemoveLeaf(Doorway d) {
+	protected void RemoveDoorway(Doorway d) {
 		if (d == null) {
 			throw new NullReferenceException($"Cannot remove a leaf that has already been destroyed");
 		}
-		try {
-			this.leaves[d.Size].Remove(d);
-		} catch (KeyNotFoundException) {
-			Debug.LogError($"No leaves of size {d.Size}",this);
+		if (!this.DoorwayManager.Remove(d)) {
+			Debug.LogError($"Doorway {d.Tile.name}:{d.name} not found/removed",this);
 		}
-		try {
-			this.leavesByPos[LeafPosition(d)].Remove(d);
-		} catch (KeyNotFoundException) {
-			Debug.LogError($"No leaves at {LeafPosition(d)}",this);
+	}
+	
+	public virtual bool VerifyTilePlacement(Tile tile) {
+		if (tile == null) {
+			Debug.LogException(new ArgumentNullException("Tile tile"), this);
+			return false;
 		}
-		numLeaves--;
+		return !this.boundsMap.Intersects(tile);
 	}
 	
 	public virtual Tile AddTile(PlacementInfo placement) {
 		Tile newTile = placement.NewTile;
 		if (newTile.IsPrefab) {
-			newTile = newTile.Instantiate(this.gameObject.transform);
+			newTile = newTile.Instantiate(this.transform);
 		}
 		if (this.RootTile == null) {
 			this.RootTile = newTile;
-			this.RootTile.PlaceAsRoot(this.gameObject.transform);
+			this.RootTile.PlaceAsRoot(this.transform);
 			foreach (Doorway d in this.RootTile.Doorways) {
-				AddLeaf(d);
-				subscribeToDoorwayEvents(d);
+				this.AddDoorway(d);
 			}
 			return this.RootTile;
 		}
@@ -496,13 +802,10 @@ public class GameMap : MonoBehaviour {
 			return null;
 		}
 		
-		RemoveLeaf(leaf);
-		for (int i=0; i<newTile.Doorways.Length; i++) {
-			if (i != newTileTargetDoorwayIdx) {
-				this.AddLeaf(newTile.Doorways[i]);
-			}
-			subscribeToDoorwayEvents(newTile.Doorways[i]);
+		foreach (Doorway d in newTile.Doorways) {
+			this.AddDoorway(d);
 		}
+		this.boundsMap.Add(newTile);
 		
 		return newTile;
 	}
@@ -511,13 +814,8 @@ public class GameMap : MonoBehaviour {
 		foreach (Tile t in removal.Target.gameObject.GetComponentsInChildren<Tile>()) {
 			this.TileRemovalEvent?.Invoke(t);
 		}
+		this.boundsMap.Remove(removal.Target);
 		GameObject.Destroy(removal.Target.gameObject);
-	}
-	
-	private void subscribeToDoorwayEvents(Doorway d) {
-		d.OnDisconnectEvent += (Doorway d) => {this.AddLeaf(d); this.RemoveExtraConnection(d);};
-		d.OnDestroyEvent += (Doorway d) => {this.RemoveLeaf(d); this.RemoveExtraConnection(d);};
-		d.OnConnectEvent += (Doorway d,Doorway e) => this.RemoveLeaf(d);
 	}
 	
 	// Possible optimization if necessary:
