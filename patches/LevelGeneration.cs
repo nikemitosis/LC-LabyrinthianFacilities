@@ -4,6 +4,8 @@ namespace LabyrinthianFacilities.Patches;
 using DgConversion;
 
 using System;
+using System.Reflection;
+using System.Reflection.Emit;
 using System.Collections.Generic;
 
 using HarmonyLib;
@@ -211,5 +213,91 @@ public class DontFallOnLoad {
 			__instance.targetFloorPosition  = __instance.transform.localPosition;
 			__instance.startFallingPosition = __instance.transform.localPosition;
 		}
+	}
+}
+
+[HarmonyPatch(typeof(RoundManager))]
+public class DontDestroyRandomMapObjects {
+	// Pre-writing note: god help me
+	// Post-writing note: we might not even keep this when we start saving hazards which is funny to me
+	[HarmonyPatch(nameof(RoundManager.SpawnMapObjects))]
+	public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+		// all this does is change the for loop condition at the very end to check for less than zero, instead 
+		// of less than the array length
+		int state = 0;
+		Queue<CodeInstruction> buffer = new(3);
+		foreach (CodeInstruction instr in instructions) {
+			switch (state) {
+				case 0:
+					// load zero to store into local var
+					if (instr.opcode == OpCodes.Ldc_I4_0) state = 1;
+				break; case 1:
+					// put value (0) into for loop iteration var
+					int? operand = (instr.operand as LocalBuilder)?.LocalIndex ?? instr.operand as int?;
+					state = (
+						(instr.opcode == OpCodes.Stloc_S && operand == 17)
+						? 2 : 0
+					);
+				break; case 2:
+					// goto for loop body
+					state = (
+						// for some reason, harmony doesn't seem to like short branch instructions?
+						(instr.opcode == OpCodes.Br_S || instr.opcode == OpCodes.Br) 
+						? 3 : 0
+					);
+				break; case 3: // checkpoint - for loop initialization found
+					// look for condition - load iteration variable
+					operand = (instr.operand as LocalBuilder)?.LocalIndex ?? instr.operand as int?;
+					if (
+						instr.opcode == OpCodes.Ldloc_S 
+						&& operand == 17
+					) state = 4;
+				break; case 4:
+					// load array
+					if (instr.opcode == OpCodes.Ldloc_1) { // need to replace this with ldc.i4.0
+						buffer.Enqueue(instr);
+						state = 5; 
+					} else {
+						while (buffer.Count != 0) yield return buffer.Dequeue();
+						state = 3;
+					}
+				break; case 5:
+					// load array.Length
+					if (instr.opcode == OpCodes.Ldlen) { // need to replace this with nop
+						buffer.Enqueue(instr);
+						state = 6; 
+					} else {
+						while (buffer.Count != 0) yield return buffer.Dequeue();
+						state = 3;
+					}
+				break; case 6:
+					// convert to i32
+					if (instr.opcode == OpCodes.Conv_I4) { // need to replace this with nop
+						buffer.Enqueue(instr);
+						state = 7;
+					} else {
+						while (buffer.Count != 0) yield return buffer.Dequeue();
+						state = 3;
+					}
+				break; case 7:
+					if (instr.opcode == OpCodes.Blt_S || instr.opcode == OpCodes.Blt) {
+						state = 8;
+						buffer.Clear();
+						yield return new CodeInstruction(OpCodes.Ldc_I4_0); // was ldloc.1
+						yield return new CodeInstruction(OpCodes.Nop     ); // was ldlen
+						yield return new CodeInstruction(OpCodes.Nop     ); // was conv.i4
+					} else {
+						while (buffer.Count != 0) yield return buffer.Dequeue();
+						state = 3;
+					}
+				break; case 8:
+					// nop
+				break; default:
+					throw new InvalidOperationException("Illegal transpiler state");
+				// break;
+			}
+			if (buffer.Count == 0) yield return instr;
+		}
+		if (state != 8) throw new Exception($"Transpiler failure - only made it to state {state}/8");
 	}
 }

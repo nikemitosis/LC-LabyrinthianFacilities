@@ -463,8 +463,9 @@ public class Tile : MonoBehaviour {
 	public Doorway[] Doorways {
 		get => this.doorways ??= this.GetComponentsInChildren<Doorway>();
 	}
+	public virtual float IntersectionTolerance {get => 5f/8;}
 	public Bounds LooseBoundingBox {
-		get => new Bounds(BoundingBox.center, BoundingBox.size - 2*intersection_tolerance*Vector3.one);
+		get => new Bounds(BoundingBox.center, BoundingBox.size - 2*IntersectionTolerance*Vector3.one);
 	}
 	public Bounds BoundingBox {get => this.bounding_box;}
 	public GameMap Map {get => this.GetComponentInParent<GameMap>(true);}
@@ -490,31 +491,6 @@ public class Tile : MonoBehaviour {
 		if (initialized) return;
 		initialized = true;
 		return;
-	}
-	
-	public static float intersection_tolerance = 5f/8;
-	public bool Intersects(Tile other) {
-		var tbb = this.bounding_box;
-		var obb = other.bounding_box;
-		
-		// we dont want to include borders, and are ok with a little wiggle-room
-		// hence the random offset of extents
-		tbb.extents -= Vector3.one*intersection_tolerance;
-		obb.extents -= Vector3.one*intersection_tolerance;
-		
-		tbb.size = new Vector3(
-			tbb.size.x < 0 ? 0 : tbb.size.x,
-			tbb.size.y < 0 ? 0 : tbb.size.y,
-			tbb.size.z < 0 ? 0 : tbb.size.z
-		);
-		
-		obb.size = new Vector3(
-			obb.size.x < 0 ? 0 : obb.size.x,
-			obb.size.y < 0 ? 0 : obb.size.y,
-			obb.size.z < 0 ? 0 : obb.size.z
-		);
-		
-		return tbb.Intersects(obb) && obb.size != Vector3.zero && tbb.size != Vector3.zero;
 	}
 	
 	// WARNING: Bounding box increases *permanantly* with certain calls. This should really only be 

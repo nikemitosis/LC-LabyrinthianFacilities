@@ -1,20 +1,18 @@
 # v0.4.0
 
+### This version breaks old saves!!
+
 ## TODO Before release
- - Right now the two tunnel areas often spawn together in mineshafts
-   - Maybe make archetypes spawn in order as they would in dungen?
-     - Cheap, but wouldn't necessarily fix the issue
-   - Maybe make it so archetypes can only use a root from an archetype it could normally spawn next to?
-     - More expensive, but more definitive
  - Disable preprocessor symbols
    - SetSeed
    - Verbose flags
  - Issues to confirm and/or write and/or fix
-   - Connectors sometimes double up??
-   - Scrap from mineshaft doesn't parent to tile properly?
-   - Radar icons for scrap often times don't restore
-   - Hazards can only spawn in new tiles?
    - Main often has very few doorways in use
+   - Right now the two tunnel areas often spawn together in mineshafts
+     - Maybe make archetypes spawn in order as they would in dungen?
+       - Cheap, but wouldn't necessarily fix the issue
+     - Maybe make it so archetypes can only use a root from an archetype it could normally spawn next to?
+       - More expensive, but more definitive
 
 ### New Features
  - Overhauled tile placement
@@ -32,9 +30,17 @@
  - Added cave lights
 
 ### Tweaks
- - Tweaked tile intersection detection<sup>1</sup>
- - Improved tile placement speeds
+ - Improved tile intersection detection<sup>1</sup>
+ - Improved tile placement speeds drastically
  - Generation time reporting is now always reported as a Debug log (instead of requiring the `VERBOSE_GENERATION` flag)
+
+### Bugfixes
+ - Fixed a bug where conservative bounds for mineshaft tiles caused mapobjects to not be considered inside a tile
+ - Fixed scrap radar icons not being retained between days
+ - Fixed hazards not being able to spawn in tiles generated on previous days
+ - Fixed a bug where Doorways wouldn't save which prop was their selected random prop. This would lead to doorways mistakenly believing they didn't have a door and spawning a second door. 
+ - "Fixed" a bug where Serialization finalizers were not actually called in reverse-order of when they appeared. 
+   - "Fixed" because now it's just in-order because it was easier to implement. 
 
 ### Code Changes
  - Moved global prop registration to be handled by `DGameMap` instead of `DTile`. This removes the need for DTile to have a DGameMap parent at the time of its initialization. 
@@ -52,6 +58,7 @@
  - Added support for setting an item's weight via indexer for `WeightedList<T>`
  - Added a data structure `BoundsMap` that's more or less a binary search for objects with `Bounds`
  - Moved logic involving doorways/leaves to a new class/interface `DoorwayManager`/`IDoorwayManager`
+ - Removed `Tile.Intersects` in favor of doing an intersection check on a new `LooseBoundingBox` that is the same as the bounding box that was being compared before. 
 
 #### Footnotes
 1. Instead of linearly checking all tile bounds, tiles are organized into quadrants of the map, and those quadrants are organized in subquadrants, and so on. It is organized such that a tile only needs to check 64 tiles in the absolute worst case. In practice this number should typically be closer to 8. 

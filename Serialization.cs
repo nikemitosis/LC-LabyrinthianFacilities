@@ -204,7 +204,7 @@ internal class ReferenceInfo {
 
 // Relies on the assumption that data before an object will identify it
 // i.e. we will know what an object should be before we come across it in the bytestream
-// Finalizers are called in reverse-order of when an object appears in the file
+// Finalizers are called in the same order of when an object appears in the file
 // i.e. the first thing deserialized will be the last thing that has its finalizer called
 public sealed class DeserializationContext {
 	private byte[] data;
@@ -240,6 +240,7 @@ public sealed class DeserializationContext {
 		}
 		
 		foreach ((var obj, var action) in this.finalizers) {
+			Plugin.LogInfo($"Finalizing {obj}");
 			try {
 				#if VERBOSE_DESERIALIZE
 				Plugin.LogDebug($"Calling finalizer for {obj}");
@@ -352,8 +353,10 @@ public sealed class DeserializationContext {
 		Plugin.LogDebug($"L 0x{address:X} | {deserializer.GetType()}");
 		#endif
 		int addr = address;
+		int finalizerIdx = finalizers.Count;
+		finalizers.Add(default);
 		var rt = deserializer.Deserialize(this);
-		finalizers.Add((rt, deserializer.Finalize));
+		finalizers[finalizerIdx] = (rt, deserializer.Finalize);
 		AddReference(addr, rt);
 		if (unresolvedReferences.TryGetValue(address, out ReferenceInfo refInfo)) {
 			ConsumeInline(refInfo.deserializer);

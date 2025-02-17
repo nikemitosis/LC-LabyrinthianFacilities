@@ -22,7 +22,10 @@ using Random = System.Random;
 
 public class DDoorway : Doorway {
 	// Properties
-	public Prop ActiveRandomObject {get {return activeRandomObject;}}
+	public Prop ActiveRandomObject {
+		get => activeRandomObject;
+		protected set => activeRandomObject=value;
+	}
 	public IEnumerable<Prop> Blockers {get {
 		foreach (Prop p in alwaysBlockers) yield return p;
 		foreach (Prop p in randomBlockerSet) yield return p;
@@ -32,6 +35,9 @@ public class DDoorway : Doorway {
 		foreach (Prop p in alwaysDoors) yield return p;
 		foreach (Prop p in randomDoorSet) yield return p;
 	}}
+	public bool OwnsActiveRandomObject {
+		get => (IsVacant ? randomBlockerSet : randomDoorSet).Contains(ActiveRandomObject);
+	}
 	
 	// Protected/Private
 	protected Prop[] alwaysBlockers;
@@ -189,6 +195,32 @@ public class DDoorway : Doorway {
 				this.activeRandomObject = this.randomDoorSet[this.randomDoorSet.SummedWeight * idx];
 			}
 		}
+		this.activeRandomObject?.Enable();
+		if (con != null) {
+			con.activeRandomObject?.Disable(); 
+			con.activeRandomObject = this.activeRandomObject;
+		}
+	}
+	
+	public virtual void SetActiveObject(Prop prop) {
+		this.activeRandomObject?.Disable();
+		DDoorway con = (DDoorway)this.connection;
+		if (IsVacant) {
+			if (!this.randomBlockerSet.Contains(prop)) {
+				throw new ArgumentException(
+					$"Provided prop '{prop.name}' is not a randomBlocker of the door "
+					+$"'{this.Tile.name}:{this.name}'"
+				);
+			}
+		} else {
+			if (!this.randomDoorSet.Contains(prop)) {
+				throw new ArgumentException(
+					"Provided prop '{prop.name}' is not a randomDoor of the door "
+					+$"'{this.Tile.name}:{this.name}'"
+				);
+			}
+		}
+		this.activeRandomObject = prop;
 		this.activeRandomObject?.Enable();
 		if (con != null) {
 			con.activeRandomObject?.Disable(); 
@@ -610,7 +642,12 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 
 public sealed class DTileSerializer : TileSerializer<DTile> {
 	
-	public DTileSerializer(GameMap p) : base(p) {}
+	private Queue<bool[]> doorwaysHaveActiveProp;
+	private Queue<Prop[]> activeProps;
+	public DTileSerializer(GameMap p) : base(p) {
+		doorwaysHaveActiveProp = new();
+		activeProps = new();
+	}
 	
 	public override void Serialize(SerializationContext sc, DTile tgt) {
 		base.Serialize(sc,tgt);
@@ -629,6 +666,21 @@ public sealed class DTileSerializer : TileSerializer<DTile> {
 			throw new Exception(
 				$"Iterating over props had != props.Count iterations! ({total} != {props.Count})"
 			);
+		}
+		
+		Func<Doorway,bool> foo = (Doorway d) => (
+			((DDoorway)d).ActiveRandomObject != null 
+			&& ((DDoorway)d).ActiveRandomObject.gameObject.activeSelf
+			&& ((DDoorway)d).OwnsActiveRandomObject
+		);
+		total = sc.AddBools<Doorway>(tgt.Doorways, foo);
+		if (total != (ulong)tgt.Doorways.Length) {
+			throw new Exception(
+				$"Iterating over doorways had != Doorways.Length iterations! ({total} != {tgt.Doorways.Length})"
+			);
+		}
+		foreach (Doorway d in tgt.Doorways) {
+			if (foo(d)) sc.Add((ushort)props.IndexOf(((DDoorway)d).ActiveRandomObject));
 		}
 	}
 	
@@ -660,7 +712,37 @@ public sealed class DTileSerializer : TileSerializer<DTile> {
 			props[i++].SetActive(flag);
 		}
 		
+		bool[] flags = [..dc.ConsumeBools((ulong)tile.Doorways.Length)];
+		Prop[] randomProps = new Prop[flags.Length];
+		for (i=0; i<tile.Doorways.Length; i++) {
+			if (!flags[i]) {
+				randomProps[i] = null;
+				continue;
+			}
+			
+			dc.Consume(sizeof(ushort)).CastInto(out ushort propIdx);
+			randomProps[i] = props[propIdx];
+		}
+		doorwaysHaveActiveProp.Enqueue(flags);
+		activeProps.Enqueue(randomProps);
+		
 		return tile;
+	}
+	
+	public override void Finalize(DTile tile) {
+		bool[] flags = doorwaysHaveActiveProp.Dequeue();
+		Prop[] props = activeProps.Dequeue();
+		if (flags.Length != props.Length) throw new Exception(
+			$"Desync between flags.Length and props.Length ({flags.Length} != {props.Length})"
+		);
+		if (flags.Length != tile.Doorways.Length) throw new Exception(
+			$"Num. Doorways does not match the number of flags ({tile.Doorways.Length} != {flags.Length})\n"
+			+$"Tile: {tile.name}"
+		);
+		for (int i=0; i<flags.Length; i++) {
+			if (!flags[i]) continue;
+			((DDoorway)tile.Doorways[i]).SetActiveObject(props[i]);
+		}
 	}
 }
 

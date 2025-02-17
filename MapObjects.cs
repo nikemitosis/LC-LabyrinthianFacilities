@@ -29,16 +29,23 @@ public class MapObject : NetworkBehaviour {
 			throw new NullReferenceException($"No active/provided map to parent MapObject");
 		}
 		
-		bool noparentfound = true;
+		Tile closestTile = null;
+		float closestDist = Single.PositiveInfinity;
 		foreach (Tile t in map.GetComponentsInChildren<Tile>(
 			map.gameObject.activeInHierarchy
 		)) {
-			if (t.BoundingBox.Contains(this.transform.position)) {
-				this.transform.parent = t.transform;
-				noparentfound = false; break;
+			float dist = (
+				t.BoundingBox.ClosestPoint(this.transform.position) - this.transform.position
+			).sqrMagnitude;
+			if (dist < closestDist) {
+				closestDist = dist;
+				closestTile = t;
+				if (dist == 0) break;
 			}
-		} if (noparentfound) {
+		} if (closestDist > 100f) {
 			this.transform.parent = moon.transform;
+		} else {
+			this.transform.parent = closestTile.transform;
 		}
 		this.Grabbable.targetFloorPosition 
 			= this.Grabbable.startFallingPosition 
@@ -101,12 +108,15 @@ public class Scrap : MapObject {
 	public override void Restore() {
 		base.Restore();
 		var grabbable = this.Grabbable;
-		if (
-			!grabbable.isInShipRoom 
-			&& grabbable.radarIcon != null 
-			&& grabbable.radarIcon.gameObject != null
-		) {
-			grabbable.radarIcon.gameObject.SetActive(true);
+		if (!grabbable.isInShipRoom) {
+			if (grabbable.radarIcon == null) {
+				grabbable.radarIcon = GameObject.Instantiate(
+					StartOfRound.Instance.itemRadarIconPrefab, 
+					RoundManager.Instance.mapPropsContainer.transform
+				).transform;
+			} else {
+				grabbable.radarIcon.gameObject.SetActive(true);
+			}
 		}
 	}
 }
