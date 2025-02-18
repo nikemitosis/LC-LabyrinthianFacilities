@@ -217,7 +217,7 @@ public class DungeonFlowConverter : ITileGenerator {
 	
 	protected DTile StartRoom;
 	
-	protected List<Archetype> archetypes;
+	protected List<List<Archetype>> archetypes;
 	
 	// tile prefabs with DunGen flag TileRepeatMode.Disallow that have been placed
 	protected HashSet<DTile> tilesPlaced;
@@ -279,12 +279,22 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		this.archetypes = new();
 		// Note that nodes arent included here... for now(?)
+		flow.Lines.Sort(
+			(DunGen.Graph.GraphLine x, DunGen.Graph.GraphLine y) => {
+				float val = x.Position - y.Position;
+				if (val == 0.0f) return 0;
+				if (val > 0.0f) return 1;
+				return -1;
+			}
+		);
 		foreach (var line in flow.Lines) {
+			List<Archetype> archetypeList = new();
+			this.archetypes.Add(archetypeList);
 			summedLength += line.Length;
 			foreach (var archetype in line.DungeonArchetypes) {
 				
-				var arch = new Archetype(line.Length / line.DungeonArchetypes.Count);
-				this.archetypes.Add(arch);
+				var arch = new Archetype(line.Length);
+				archetypeList.Add(arch);
 				
 				float tset_freq = 1.0f / archetype.TileSets.Count;
 				foreach (var tileset in archetype.TileSets) {
@@ -309,7 +319,9 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		// normalize lengths so we can use them w.r.t the amount of tiles we're placing
 		for (int i=0; i<this.archetypes.Count; i++) {
-			this.archetypes[i].Length /= summedLength;
+			for (int j=0; j<this.archetypes[i].Count; j++) {
+				this.archetypes[i][j].Length /= summedLength;
+			}
 		}
 	}
 	
@@ -487,11 +499,11 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		int tile_demand_theory = tile_demand;
 		
-		ChoiceList<Archetype> archetypeChoices = new(this.archetypes);
 		List<(Archetype a,int len)> archetypeSizes = new();
-		while (tile_demand_theory != 0 && archetypeChoices.OpenCount != 0) {
-			Archetype archetype = archetypeChoices.Yield(Rng.Next(archetypeChoices.OpenCount));
-			int tileCount = (int)(archetype.Length * tile_demand_theory + 0.5f);
+		for (int i=0; i<this.archetypes.Count; i++) {
+			Archetype archetype = this.archetypes[i][Rng.Next(this.archetypes[i].Count)];
+			
+			int tileCount = (int)(archetype.Length * tile_demand + 0.5f);
 			int lower = (int)(0.9f * tileCount);
 			if (lower <= 0) lower = 1;
 			int upper = (int)(1.1f * tileCount);
@@ -499,11 +511,12 @@ public class DungeonFlowConverter : ITileGenerator {
 			if (upper < lower) {
 				break;
 			}
-			
 			tileCount = Rng.Next(lower,upper);
 			tile_demand_theory -= tileCount;
-			archetypeSizes.Add((archetype,tileCount));
+			
+			archetypeSizes.Add((archetype, tileCount));
 		}
+		
 		if (tile_demand_theory != 0) {
 			if (archetypeSizes.Count == 0) {
 				Plugin.LogError($"Was not able to select a single archetypes to generate this round");

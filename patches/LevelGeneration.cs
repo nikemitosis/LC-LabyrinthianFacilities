@@ -1,5 +1,3 @@
-#define SETSEED
-
 namespace LabyrinthianFacilities.Patches;
 using DgConversion;
 
@@ -22,7 +20,7 @@ using Doorway=LabyrinthianFacilities.Doorway;
 class GenerateLevel {
 	
 	#if SETSEED
-	public static int SetSeed = 150997470;
+	public static int SetSeed = 1521563125;
 	#endif
 	
 	[HarmonyPatch("Generate")]
