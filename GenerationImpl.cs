@@ -390,11 +390,9 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Removing tiles...");
 		
 		int tileCount = map.TileCount;
-		int lowerBound = (int)(0.8f * tileCount);
-		if (lowerBound < TileCountLowerBound) lowerBound = TileCountLowerBound;
-		int upperBound = tileCount;
+		int upperBound = Math.Min(tileCount, TileCountUpperBound - TileCountLowerBound);
+		int lowerBound = Math.Max(4*tileCount/5, TileCountLowerBound);
 		if (lowerBound > upperBound) lowerBound = upperBound;
-		
 		
 		int targetCount = Rng.Next(lowerBound,upperBound+1);
 		int numTilesToDelete = tileCount - targetCount;
@@ -488,9 +486,10 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		Plugin.LogInfo($"Placing tiles...");
 		
-		int lowerBound = map.TileCount > TileCountLowerBound ? map.TileCount : TileCountLowerBound;
+		int mapTileCount = map.TileCount;
+		int lowerBound = mapTileCount > TileCountLowerBound ? mapTileCount : TileCountLowerBound;
 		int target = Rng.Next(lowerBound, TileCountUpperBound+1);
-		int tile_demand = target - map.TileCount;
+		int tile_demand = target - mapTileCount;
 		if (tile_demand > TileCountLowerBound) tile_demand = TileCountLowerBound;
 		
 		#if VERBOSE_GENERATION

@@ -108,6 +108,10 @@ public class Scrap : MapObject {
 	public override void Restore() {
 		base.Restore();
 		var grabbable = this.Grabbable;
+		if (grabbable is LungProp apparatus) {
+			apparatus.isLungDocked = false;
+			apparatus.GetComponent<AudioSource>().Stop();
+		}
 		if (!grabbable.isInShipRoom) {
 			if (grabbable.radarIcon == null) {
 				grabbable.radarIcon = GameObject.Instantiate(

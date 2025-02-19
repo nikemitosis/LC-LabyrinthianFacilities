@@ -6,12 +6,11 @@
  - Disable preprocessor symbols
    - SetSeed
    - Verbose flags
- - Confirm whether cave vents can't spawn on client due to this mod
 
 ### New Features
  - Overhauled tile placement
    - Map Size
-     - At most, 10% of all active tiles can be deleted
+     - At most, 20% of all active tiles can be deleted
      - There is now a minimum amount of tiles that can exist at any given time
        - This minimum is much greater than what would typically generate before
      - There is now a maximum amount of tiles that can exist at any given time
@@ -34,6 +33,7 @@
  - Fixed scrap radar icons not being retained between days
  - Fixed hazards not being able to spawn in tiles generated on previous days
  - Fixed a bug where Doorways wouldn't save which prop was their selected random prop. This would lead to doorways mistakenly believing they didn't have a door and spawning a second door. 
+ - Fixed old apparatuses being considered docked when loaded from a save, even if they were outside or on the ground. 
 
 ### Technical
 
