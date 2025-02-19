@@ -2,11 +2,6 @@
 
 ### This version breaks old saves!!
 
-## TODO Before release
- - Disable preprocessor symbols
-   - SetSeed
-   - Verbose flags
-
 ### New Features
  - Overhauled tile placement
    - Map Size
