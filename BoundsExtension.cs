@@ -230,7 +230,10 @@ public class BoundsMap<T> : ICollection<T> where T : class {
 		}
 	}
 	
-	public bool Remove(T item) {
+	public bool Remove(T item) => Remove(item,ItemBounds(item));
+	private bool Remove(T item, Bounds itemBounds) {
+		if (!this.Bounds.Intersects(itemBounds)) return false;
+		
 		if (!HasSplit) {
 			for (int i=0; i<Count; i++) {
 				if (Items[i]?.Equals(item) ?? item?.Equals(Items[i]) ?? true) {

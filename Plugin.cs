@@ -13,6 +13,7 @@ using System.IO;
 using System.Reflection;
 
 using BepInEx;
+using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 
@@ -26,10 +27,12 @@ using Random = System.Random;
 using Object = UnityEngine.Object;
 
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
-public class Plugin : BaseUnityPlugin {
+public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.4.0";
+	public const string VERSION = "0.4.1";
+	
+	public static Plugin Singleton {get; private set;}
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -61,7 +64,15 @@ public class Plugin : BaseUnityPlugin {
 	}
 	
 	private void Awake() {
+		if (Singleton != null) throw new InvalidOperationException("Singleton violation");
+		Singleton = this;
 		Logger = base.Logger;
+		
+		if (!LabyrinthianFacilities.Config.Singleton.GlobalEnable) {
+			LogInfo("{NAME} is disabled by its config; Skipping initialization");
+			return;
+		}
+		
 		try {
 			NetcodePatch();
 		} catch (Exception e) {
@@ -75,7 +86,7 @@ public class Plugin : BaseUnityPlugin {
 		} catch (Exception ex) {
 			Plugin.LogError($"Error syncing saves: {ex.Message}");
 		}
-		LogInfo($"Plugin {Plugin.GUID} is Awoken!");
+		LogInfo($"{NAME} is Awoken!");
 	}
 	
 	public static void LogDebug  (string message) {
@@ -504,6 +515,7 @@ public class Moon : MonoBehaviour {
 	}
 	
 	public void PreserveBees() {
+		if (!Config.Singleton.SaveHives) return;
 		foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
 			bee.hive.GetComponent<Beehive>().SaveBees(bee);
 		}

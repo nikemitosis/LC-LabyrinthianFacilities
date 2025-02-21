@@ -55,6 +55,8 @@ public class MapObject : NetworkBehaviour {
 	}
 	
 	public virtual void Preserve() {
+		if (!Config.Singleton.SaveMapObjects) return;
+		
 		var grabbable = this.Grabbable;
 		grabbable.isInShipRoom = (
 			grabbable.isInShipRoom
@@ -98,6 +100,8 @@ public class Scrap : MapObject {
 	}
 	
 	public override void Preserve() {
+		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveScrap) return;
+		
 		base.Preserve();
 		var grabbable = this.Grabbable;
 		if (grabbable.radarIcon != null && grabbable.radarIcon.gameObject != null) {
@@ -220,6 +224,7 @@ public class Beehive : Scrap {
 	}
 	
 	public override void Preserve() {
+		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveHives) return;
 		base.Preserve();
 		
 		if (this.Grabbable.isInShipRoom) {
@@ -237,6 +242,11 @@ public class Equipment : MapObject {
 		}
 		Plugin.LogError($"Unable to find equipment prefab '{name}'");
 		return null;
+	}
+	
+	public override void Preserve() {
+		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveEquipment) return;
+		base.Preserve();
 	}
 }
 
@@ -260,6 +270,8 @@ public class Cruiser : NetworkBehaviour {
 	}}
 	
 	public void Preserve() {
+		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveCruisers) return;
+		
 		var vc = this.GetComponent<VehicleController>();
 		if (vc.magnetedToShip  ||  vc.carDestroyed && vc.GetComponentsInChildren<MapObject>().Length == 0) {
 			this.transform.parent = null;

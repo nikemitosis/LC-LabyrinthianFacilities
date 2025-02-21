@@ -19,19 +19,15 @@ using Doorway=LabyrinthianFacilities.Doorway;
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
 	
-	#if SETSEED
-	public static int SetSeed = 1521563125;
-	#endif
+	public static int SetSeed = Config.Singleton.Seed;
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		try {
-			#if SETSEED
-			int seed = SetSeed;
-			#else
-			int seed = __instance.Seed;
-			#endif
+			int seed = Config.Singleton.UseSetSeed ? SetSeed : __instance.Seed;
+			__instance.Seed = seed;
+			// if (!Config.Singleton.UseCustomGeneration) return true;
 			
 			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
@@ -44,6 +40,10 @@ class GenerateLevel {
 				flow,
 				(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 			));
+			
+			if (Config.Singleton.UseSetSeed && Config.Singleton.IncrementSetSeed) {
+				SetSeed++;
+			}
 		} catch (Exception e) {
 			Plugin.LogError($"{e}");
 			throw;

@@ -763,19 +763,15 @@ public class GameMap : MonoBehaviour {
 		if (this.RootTile == null) {
 			this.RootTile = newTile;
 			this.RootTile.PlaceAsRoot(this.transform);
-			foreach (Doorway d in this.RootTile.Doorways) {
-				this.AddDoorway(d);
+		} else {
+			Doorway leaf = placement.AttachmentPoint;
+			int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
+			
+			bool success = newTile.Place(newTileTargetDoorwayIdx,leaf);
+			if (!success) {
+				GameObject.Destroy(newTile.gameObject);
+				return null;
 			}
-			return this.RootTile;
-		}
-		
-		Doorway leaf = placement.AttachmentPoint;
-		int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
-		
-		bool success = newTile.Place(newTileTargetDoorwayIdx,leaf);
-		if (!success) {
-			GameObject.Destroy(newTile.gameObject);
-			return null;
 		}
 		
 		foreach (Doorway d in newTile.Doorways) {
