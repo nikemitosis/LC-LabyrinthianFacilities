@@ -336,6 +336,7 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 	public abstract T GetPrefab(string id);
 	
 	private MonoBehaviour parent;
+	public MonoBehaviour Parent {get => parent;}
 	
 	public MapObjectSerializer(Moon m) {
 		parent = m;
@@ -431,6 +432,7 @@ public class EquipmentSerializer : MapObjectSerializer<Equipment> {
 
 public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	private MonoBehaviour parent;
+	public MonoBehaviour Parent {get => parent;}
 	
 	public MapObjectNetworkSerializer(Moon     p) {this.parent = p;}
 	public MapObjectNetworkSerializer(DGameMap p) {this.parent = p;}

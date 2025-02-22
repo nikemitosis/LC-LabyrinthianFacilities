@@ -8,9 +8,6 @@ using System;
 using System.Collections;
 using System.Collections.Generic;
 using System.Linq;
-#if VERBOSE_GENERATION
-using System.Diagnostics;
-#endif
 
 using UnityEngine;
 using UnityEngine.AI;
@@ -589,15 +586,14 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	
 	public DGameMapSerializer() : base(null) {}
 	
-	private void DeserializeMapObjects<T>(ISerializer<T> ds, DeserializationContext dc)
+	private void DeserializeMapObjects<T>(MapObjectSerializer<T> ds, DeserializationContext dc)
 		where T : MapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		#if VERBOSE_DESERIALIZE
-			Plugin.LogDebug(
-				$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
-			);
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug(
+			$"Loading {count} {typeof(T)} objects for DGameMap '{ds.Parent.name}' from address "
+			+$"0x{dc.Address:X}"
+		);
 		for (ushort i=0; i<count; i++) {
 			dc.ConsumeInline(ds);
 		}
@@ -653,9 +649,7 @@ public sealed class DTileSerializer : TileSerializer<DTile> {
 		base.Serialize(sc,tgt);
 		
 		IList<Prop> props = tgt.GetProps();
-		#if VERBOSE_SERIALIZE
-		Plugin.LogDebug($"Found {props.Count} props");
-		#endif
+		if (SerializationContext.Verbose) Plugin.LogDebug($"Found {props.Count} props");
 		sc.Add((ushort)props.Count);
 		
 		ulong total = sc.AddBools<Prop>(
@@ -690,14 +684,10 @@ public sealed class DTileSerializer : TileSerializer<DTile> {
 	) {
 		base.Deserialize(tile,dc);
 		
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"Deserializing {tile.name}");
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug($"Deserializing {tile.name}");
 		
 		dc.Consume(2).CastInto(out ushort propCount);
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"Found {propCount} props");
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug($"Found {propCount} props");
 		
 		IList<Prop> props = tile.GetProps();
 		if (propCount != props.Count) {
@@ -777,11 +767,9 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		where T : MapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		#if VERBOSE_DESERIALIZE
-			Plugin.LogDebug(
-				$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
-			);
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug(
+			$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
+		);
 		
 		for (ushort i=0; i<count; i++) {
 			dc.ConsumeInline(ds);

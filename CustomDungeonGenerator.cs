@@ -895,9 +895,9 @@ public class TileSerializer<T> : Serializer<T> where T : Tile {
 			if (tileConnection < address) { // tileConnection is closer to root
 				// Place this tile onto other tile
 				T other = (T)dc.GetReference(tileConnection);
-				#if VERBOSE_DESERIALIZE
-				Plugin.LogDebug($"Attaching {tile.name}:{thisDoorIndex} to {other.name}:{otherDoorIndex}");
-				#endif
+				if (DeserializationContext.Verbose) Plugin.LogDebug(
+					$"Attaching {tile.name}:{thisDoorIndex} to {other.name}:{otherDoorIndex}"
+				);
 				if (!hasConnected) {
 					hasConnected = true;
 					ParentMap.AddTile(

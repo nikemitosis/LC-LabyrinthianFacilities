@@ -1,5 +1,3 @@
-// ^(\[.{7}:((LabyrinthianFacilities)|( Unity Log))\] .*$)
-// (Logging regex)
 namespace LabyrinthianFacilities;
 
 using DgConversion;
@@ -68,10 +66,13 @@ public sealed class Plugin : BaseUnityPlugin {
 		Singleton = this;
 		Logger = base.Logger;
 		
-		if (!LabyrinthianFacilities.Config.Singleton.GlobalEnable) {
+		var cfg = LabyrinthianFacilities.Config.Singleton;
+		if (!cfg.GlobalEnable) {
 			LogInfo("{NAME} is disabled by its config; Skipping initialization");
 			return;
 		}
+		DeserializationContext.Verbose = cfg.EnableVerboseDeserialization;
+		SerializationContext.Verbose = cfg.EnableVerboseSerialization;
 		
 		try {
 			NetcodePatch();
@@ -747,16 +748,14 @@ public class MoonSerializer : Serializer<Moon> {
 	}
 	
 	private void DeserializeMapObjects<T>(
-		DeserializationContext dc, ISerializer<T> ds
+		DeserializationContext dc, MapObjectSerializer<T> ds
 	)
 		where T : MapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		#if VERBOSE_DESERIALIZE
-			Plugin.LogDebug(
-				$"Loading {count} {typeof(T)} objects for Moon '{moon.name}' from address 0x{dc.Address:X}"
-			);
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug(
+			$"Loading {count} {typeof(T)} objects for Moon '{ds.Parent.name}' from address 0x{dc.Address:X}"
+		);
 		
 		for (ushort i=0; i<count; i++) {
 			dc.ConsumeInline(ds);
@@ -840,16 +839,14 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	}
 	
 	private void DeserializeMapObjects<T>(
-		DeserializationContext dc, ISerializer<T> ds
+		DeserializationContext dc, MapObjectNetworkSerializer<T> ds
 	)
 		where T : MapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		#if VERBOSE_DESERIALIZE
-			Plugin.LogDebug(
-				$"Loading {count} {typeof(T)} objects for Moon '{moon.name}' from address 0x{dc.Address:X}"
-			);
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug(
+			$"Loading {count} {typeof(T)} objects for Moon '{ds.Parent.name}' from address 0x{dc.Address:X}"
+		);
 		
 		for (ushort i=0; i<count; i++) {
 			dc.ConsumeInline(ds);
@@ -863,9 +860,9 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		
 		// Cruisers
 		dc.Consume(2).CastInto(out ushort numCruisers);
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"Loading {numCruisers} cruisers for {moon.name} from address 0x{dc.Address:X}");
-		#endif
+		if (DeserializationContext.Verbose) Plugin.LogDebug(
+			$"Loading {numCruisers} cruisers for {moon.name} from address 0x{dc.Address:X}"
+		);
 		var cruiserSerializer = new CruiserNetworkSerializer(moon);
 		for (ushort i=0; i<numCruisers; i++) {
 			dc.ConsumeInline(cruiserSerializer);

@@ -41,6 +41,8 @@ public abstract class Serializer<T> : ISerializer<T> {
 
 public sealed class SerializationContext {
 	
+	public static bool Verbose = false;
+	
 	private class ReferenceInfo {
 		public List<int> requests = new();
 		public ISerializer<object> serializer;
@@ -70,9 +72,7 @@ public sealed class SerializationContext {
 				refInfo = entry.Value;
 				break;
 			}
-			#if VERBOSE_SERIALIZE
-			Plugin.LogDebug($"A {newtgt ?? "null"} | {refInfo.serializer}");
-			#endif
+			if (Verbose) Plugin.LogDebug($"A {newtgt ?? "null"} | {refInfo.serializer}");
 			AddInline(newtgt, refInfo.serializer);
 		}
 		
@@ -117,9 +117,7 @@ public sealed class SerializationContext {
 	}
 	
 	public void AddInline(object tgt, ISerializer<object> ser) {
-		#if VERBOSE_SERIALIZE
-		Plugin.LogDebug($"I 0x{Address:X} | {tgt ?? "null"} | {ser}");
-		#endif
+		if (Verbose) Plugin.LogDebug($"I 0x{Address:X} | {tgt ?? "null"} | {ser}");
 		if (references.ContainsKey(tgt)) {
 			throw new InvalidOperationException($"Cannot have two references to the same object ({tgt})");
 		}
@@ -143,9 +141,7 @@ public sealed class SerializationContext {
 	private readonly byte[] REFERENCE_PLACEHOLDER = [1,2,3,4];
 	private readonly byte[] NULL_BYTES = [0,0,0,0];
 	public void AddReference(object refTo, ISerializer<object> ser) {
-		#if VERBOSE_SERIALIZE
-		Plugin.LogDebug($"R {refTo ?? "null"} | {ser}");
-		#endif
+		if (Verbose) Plugin.LogDebug($"R {refTo ?? "null"} | {ser}");
 		if (refTo == null) {
 			this.Add(NULL_BYTES);
 		} else if (references.TryGetValue(refTo, out int addr)) {
@@ -207,6 +203,8 @@ internal class ReferenceInfo {
 // Finalizers are called in the same order of when an object appears in the file
 // i.e. the first thing deserialized will be the last thing that has its finalizer called
 public sealed class DeserializationContext {
+	public static bool Verbose = false;
+	
 	private byte[] data;
 	
 	private Dictionary<int, object> references;
@@ -240,11 +238,8 @@ public sealed class DeserializationContext {
 		}
 		
 		foreach ((var obj, var action) in this.finalizers) {
-			Plugin.LogInfo($"Finalizing {obj}");
 			try {
-				#if VERBOSE_DESERIALIZE
-				Plugin.LogDebug($"Calling finalizer for {obj}");
-				#endif
+				if (Verbose) Plugin.LogDebug($"Calling finalizer for {obj}");
 				action.Invoke(obj);
 			} catch (Exception e) {
 				Plugin.LogError($"Deserialization finalizer threw an exception: \n{e}");
@@ -312,9 +307,7 @@ public sealed class DeserializationContext {
 			);
 		}
 		
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"Q 0x{addr:X} | {deserializer.GetType()}");
-		#endif
+		if (Verbose) Plugin.LogDebug($"Q 0x{addr:X} | {deserializer.GetType()}");
 		
 		if (!unresolvedReferences.TryGetValue(addr,out ReferenceInfo refInfo)) {
 			refInfo = new();
@@ -349,9 +342,8 @@ public sealed class DeserializationContext {
 				$"No deserializer provided for object at address 0x{address:X}"
 			);
 		}
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"L 0x{address:X} | {deserializer.GetType()}");
-		#endif
+		
+		if (Verbose) Plugin.LogDebug($"L 0x{address:X} | {deserializer.GetType()}");
 		int addr = address;
 		int finalizerIdx = finalizers.Count;
 		finalizers.Add(default);
@@ -383,9 +375,7 @@ public sealed class DeserializationContext {
 	}
 	
 	private void AddReference(int address, object refr) {
-		#if VERBOSE_DESERIALIZE
-		Plugin.LogDebug($"A 0x{address:X} | {refr}");
-		#endif
+		if (Verbose) Plugin.LogDebug($"A 0x{address:X} | {refr}");
 		references.Add(address,refr);
 		if (!unresolvedReferences.TryGetValue(address,out ReferenceInfo refInfo)) return;
 		foreach (Action<object> action in refInfo.actions) {

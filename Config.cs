@@ -92,6 +92,7 @@ public sealed class Config {
 		singleton = this;
 		
 		var Config = Plugin.Singleton.Config;
+		Config.SaveOnConfigSet = false;
 		
 		string section = "Features";
 		m_GlobalEnable = Config.Bind(
@@ -166,7 +167,7 @@ public sealed class Config {
 		m_SaveHazards = Config.Bind(
 			section,
 			"SaveHazards",
-			true,
+			false,
 			"NOT YET IMPLEMENTED; Save Hazards (turrets, landmines, etc.)"
 		);
 		m_SaveTurrets = Config.Bind(
@@ -246,14 +247,14 @@ public sealed class Config {
 			section,
 			"EnableVerboseSerialization",
 			false,
-			"NOT YET IMPLEMENTED; Enables verbose logging for serialization (used for saving maps & sending data to clients)\n"
+			"Enables verbose logging for serialization (used for saving maps & sending data to clients)\n"
 			+"(Requires LogLevels contains Debug)"
 		);
 		m_EnableVerboseDeserialization = Config.Bind(
 			section,
 			"EnableVerboseDeserialization",
 			false,
-			"NOT YET IMPLEMENTED; Enables verbose logging for deserialization (used for loading maps & receiving data from server)\n"
+			"Enables verbose logging for deserialization (used for loading maps & receiving data from server)\n"
 			+"(Requires LogLevels contains Debug)"
 		);
 		
@@ -278,5 +279,8 @@ public sealed class Config {
 			true,
 			"Whether to increment the set seed daily"
 		);
+		
+		Config.Save();
+		Config.SaveOnConfigSet = true;
 	}
 }
