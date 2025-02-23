@@ -206,7 +206,6 @@ public sealed class Plugin : BaseUnityPlugin {
 			}
 		}
 	}
-	
 }
 
 public class MapHandler : NetworkBehaviour {
@@ -215,9 +214,8 @@ public class MapHandler : NetworkBehaviour {
 	
 	private Dictionary<SelectableLevel,Moon> moons = null;
 	private Dictionary<string,Moon> unresolvedMoons = null;
-	private Moon activeMoon = null;
 	
-	public Moon ActiveMoon {get {return activeMoon;}}
+	public Moon ActiveMoon {get; private set;}
 	
 	public override void OnNetworkSpawn() {
 		if (Instance != null) {
@@ -290,8 +288,8 @@ public class MapHandler : NetworkBehaviour {
 	}
 	
 	public void ClearActiveMoon() {
-		if (this.activeMoon != null) this.activeMoon.gameObject.SetActive(false);
-		this.activeMoon = null;
+		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
+		this.ActiveMoon = null;
 	}
 	
 	public IEnumerator Generate(
@@ -299,23 +297,27 @@ public class MapHandler : NetworkBehaviour {
 		DungeonFlowConverter tilegen, 
 		Action<GameMap> onComplete=null
 	) {
-		if (this.activeMoon != null) this.activeMoon.gameObject.SetActive(false);
+		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
 		
 		Moon moon = GetMoon(level);
-		this.activeMoon = moon;
-		this.activeMoon.gameObject.SetActive(true);
+		this.ActiveMoon = moon;
+		this.ActiveMoon.gameObject.SetActive(true);
 		
-		return this.activeMoon.Generate(tilegen, onComplete);
+		yield return this.ActiveMoon.Generate(tilegen, onComplete);
+		
+		if (Config.Singleton.EnableHistory) {
+			RecordDay(tilegen.Seed);
+		}
 	}
 	
 	// Stop RoundManager from deleting scrap at the end of the day by hiding it
 	// (Scrap is hidden by making it inactive; LC only looks for enabled GrabbableObjects)
 	public void PreserveMapObjects() {
-		this.activeMoon?.PreserveMapObjects();
+		this.ActiveMoon?.PreserveMapObjects();
 	}
 	
 	public void PreserveBees() {
-		this.activeMoon?.PreserveBees();
+		this.ActiveMoon?.PreserveBees();
 	}
 	
 	public void DestroyAllScrap() {
@@ -435,6 +437,22 @@ public class MapHandler : NetworkBehaviour {
 			}
 		}
 	}
+	
+	internal void RecordDay(int modSeed) {
+		using (FileStream fs = File.Open(
+			$"{SaveManager.ModSaveDirectory}/{SaveManager.CurrentSave}History.log", FileMode.Append
+		)) {
+			fs.Write((
+				$"Q{TimeOfDay.Instance.timesFulfilledQuota+1} D{4-TimeOfDay.Instance.daysUntilDeadline}\n"
+			).GetBytes());
+			fs.Write($"StartOfRound.randomMapSeed: {StartOfRound.Instance.randomMapSeed}\n".GetBytes());
+			fs.Write($"Active moon: {this.ActiveMoon?.name ?? "Company"}\n".GetBytes());
+			if (this.ActiveMoon != null) {
+				fs.Write($"Active map: {this.ActiveMoon.ActiveMap?.name ?? "Company"}\n".GetBytes());
+			}
+			fs.Write($"Mod Seed: {modSeed}\n\n".GetBytes());
+		}
+	}
 }
 
 public class Moon : MonoBehaviour {
@@ -539,20 +557,17 @@ public class Moon : MonoBehaviour {
 internal static class SaveManager {
 	
 	public static double SaveTimeTolerance = 20.0d;
-	public static string ModSaveDirectory;
-	public static string NativeSaveDirectory;
+	public static string NativeSaveDirectory {
+		get => Application.persistentDataPath;
+	}
+	public static string ModSaveDirectory {
+		get => $"{NativeSaveDirectory}/{Plugin.NAME}";
+	}
 	
-	public static string CurrentSave {get {return GameNetworkManager.Instance.currentSaveFileName;}}
-	public static string CurrentSavePath {get {
-		return $"{ModSaveDirectory}/{GameNetworkManager.Instance.currentSaveFileName}.dat";
-	}}
-	public static string CurrentSavePathNative {get {
-		return $"{Application.persistentDataPath}/{GameNetworkManager.Instance.currentSaveFileName}";
-	}}
-	
-	static SaveManager() {
-		ModSaveDirectory = $"{Application.persistentDataPath}/{Plugin.NAME}";
-		NativeSaveDirectory = Application.persistentDataPath;
+	public static string CurrentSave {get => GameNetworkManager.Instance.currentSaveFileName;}
+	public static string CurrentSavePath {get => $"{ModSaveDirectory}/{CurrentSave}.dat";}
+	public static string CurrentSavePathNative {
+		get => $"{NativeSaveDirectory}/{GameNetworkManager.Instance.currentSaveFileName}";
 	}
 	
 	// path does not have to be fully qualified, as long as it has the name of the save file
@@ -598,6 +613,11 @@ internal static class SaveManager {
 			return;
 		}
 		Plugin.LogInfo($"Deleting save '{saveName}'!");
+		file.Delete();
+		
+		// delete history, if it exists
+		file = new FileInfo($"{ModSaveDirectory}/{saveName.Substring(0,saveName.Length-4)}History.log");
+		if (!file.Exists) return;
 		file.Delete();
 	}
 	

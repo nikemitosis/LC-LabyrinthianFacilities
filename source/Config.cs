@@ -47,6 +47,9 @@ public sealed class Config {
 	private ConfigEntry<bool> m_EnableVerboseSerialization;
 	private ConfigEntry<bool> m_EnableVerboseDeserialization;
 	
+	// Debug.History
+	private ConfigEntry<bool> m_EnableHistory;
+	
 	// Features.SetSeed
 	private ConfigEntry<bool> m_UseSetSeed;
 	private ConfigEntry<int > m_Seed;
@@ -82,6 +85,8 @@ public sealed class Config {
 	public bool EnableVerboseGeneration      {get => m_EnableVerboseGeneration.Value;}
 	public bool EnableVerboseSerialization   {get => m_EnableVerboseSerialization.Value;}
 	public bool EnableVerboseDeserialization {get => m_EnableVerboseDeserialization.Value;}
+	
+	public bool EnableHistory                {get => m_EnableHistory.Value;}
 	
 	public bool UseSetSeed                   {get => m_UseSetSeed.Value;}
 	public int  Seed                         {get => m_Seed.Value;}
@@ -256,6 +261,14 @@ public sealed class Config {
 			false,
 			"Enables verbose logging for deserialization (used for loading maps & receiving data from server)\n"
 			+"(Requires LogLevels contains Debug)"
+		);
+		
+		section = "Debug.History";
+		m_EnableHistory = Config.Bind(
+			section,
+			"EnableHistory",
+			false,
+			"Enables recording of seeds, interiors, and moons each day, for each save. Located in the same place as savedata. "
 		);
 		
 		section = "Features.SetSeed";

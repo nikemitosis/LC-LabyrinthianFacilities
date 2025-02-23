@@ -1,26 +1,6 @@
-# v0.4.1
+# v0.4.2
 
 ## New Features
- - [#30](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/30) Added a config! 
-   (Currently Implemented)
-   - Global Enable/Disable
-   - Save MapObjects
-     - Equipment
-	 - Scrap
-	 - Cruisers
-	 - Beehives
-   - Verbose Logging
-	 - Enable Verbose Deserialization
-	 - Enable Verbose Serialization
-	 - Enable Verbose Generation
-   - Use Set Seed
-     - Seed
-	 - Increment seed daily
-	   - Sidenote: Good for players who want a "set seed run" rather than just setting a seed for testing
-	   - Set seed is currently very limited; it does not affect things like which interior is generated. It *only* affects tile and prop placement. 
-
-## Bugfixes
- - Fixed a bug where the root tile would have its bounds ignored. This only affected the mineshaft.
-
-## Technical
- - Added a shortcut to `BoundsMap.Remove` so now the search for the given item is terminated if its bounds don't overlap with the bounds of the `BoundsMap`
+ - You can now save the "history" of your lethal company saves. The config entry to enable is under `Debug.History`. 
+   - A "history" is the sequence of seeds, moons, and interiors used over the course of a save. This history is not wiped when a run is lost, but it is deleted when a save is deleted. 
+   - A History for a given save is stored at `<Lethal Company Savedata>/LabyrinthianFacilities/<Save>History.log`
