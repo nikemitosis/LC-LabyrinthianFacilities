@@ -9,8 +9,11 @@ using System.Collections.Generic;
 using HarmonyLib;
 
 using UnityEngine;
+using Unity.Netcode;
 
 using DunGen;
+
+using GameNetcodeStuff;
 
 using Object=UnityEngine.Object;
 using Tile=LabyrinthianFacilities.Tile;
@@ -20,12 +23,22 @@ using Doorway=LabyrinthianFacilities.Doorway;
 class GenerateLevel {
 	
 	public static int SetSeed = Config.Singleton.Seed;
+	#if SeedOverride
+	private static int[] Seeds = [1712096043,1530581813,1696599376];
+	private static int SeedIndex = 0;
+	#endif
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		try {
+			#if !SeedOverride
 			int seed = Config.Singleton.UseSetSeed ? SetSeed : __instance.Seed;
+			#else
+			int seed = Seeds[SeedIndex++];
+			SeedIndex %= Seeds.Length;
+			#endif
+			
 			__instance.Seed = seed;
 			// if (!Config.Singleton.UseCustomGeneration) return true;
 			
@@ -165,6 +178,19 @@ class StartOfRoundPatch {
 	public static void ResetMapHandler() {
 		MapHandler.Instance.Clear();
 	}
+	
+	#if SeedOverride
+	private static int[] Seeds = [26268466,1156627,72129288];
+	private static int Idx = 0;
+	
+	[HarmonyPatch("StartGame")]
+	[HarmonyPrefix]
+	public static void SetRandomMapSeed() {
+		StartOfRound.Instance.overrideRandomSeed = true;
+		StartOfRound.Instance.overrideSeedNumber = Seeds[Idx];
+		Idx = (Idx+1)%Seeds.Length;
+	}
+	#endif
 }
 
 [HarmonyPatch(typeof(RedLocustBees))]
@@ -176,24 +202,48 @@ public class RespawnBeesPatch {
 	 * 4. sets `lastKnownHivePosition`
 	 * 5. Adds to RoundManager.totalScrapValueInLevel (skipping since it should be included already)
 	 * 6. Sets `hasSpawnedHive`
+	 * 
+	 * 1, 3, 5(?) already done in previous days
+	 * 2, 4 done in Beehive.SpawnBees
+	 * 6 done in UpdateClientsOnBees (patch in this class)
 	*/
 	[HarmonyPatch("SpawnHiveNearEnemy")]
 	[HarmonyPrefix]
-	public static bool DontSpawnNewHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
+	public static bool DontSpawnNewHive(RedLocustBees __instance) {
 		try {
-			var flag = __instance.GetComponent<DummyFlag>();
-			if (flag == null) return true;
-			MonoBehaviour.Destroy(flag);
-			
-			// (hive and lastKnownHivePosition are both set by Beehive.SpawnBees)
-			
-			___hasSpawnedHive = true;
-			
-			return false;
+			return __instance.GetComponent<DummyFlag>() == null;
 		} catch (Exception e) {
 			Plugin.LogError($"{e}");
 			throw;
 		}
+	}
+	
+	[HarmonyPatch("Start")]
+	[HarmonyPostfix]
+	public static void SetHasSpawnedHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
+		Plugin.LogFatal("SetHasSpawnedHive Attempt");
+		var flag = __instance.GetComponent<DummyFlag>();
+		if (flag == null) return;
+		Plugin.LogFatal("SetHasSpawnedHive");
+		MonoBehaviour.Destroy(flag);
+		
+		___hasSpawnedHive = true;
+	} 
+	
+	[HarmonyPatch(typeof(EnemyAI),"StartSearch")]
+	[HarmonyPrefix]
+	public static void SaySearch(EnemyAI __instance, Vector3 startOfSearch, AISearchRoutine newSearch) {
+		if (__instance is RedLocustBees bees) Plugin.LogFatal(
+			$"Searching @ {startOfSearch} - isNull: {newSearch == null} "
+			+$"isHiveSearch: {newSearch == bees.searchForHive}"
+		);
+	}
+	
+	[HarmonyPatch("SwitchOwnershipOfBeesToClient")]
+	[HarmonyPrefix]
+	public static void SwitchOwnership(RedLocustBees __instance, PlayerControllerB player) {
+		Plugin.LogFatal($"Switching ownership to {player.playerUsername}");
+		Plugin.LogFatal($"state - {__instance.currentBehaviourStateIndex}");
 	}
 }
 

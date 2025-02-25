@@ -167,7 +167,7 @@ public class Beehive : Scrap {
 	
 	protected virtual void OnEnable() {
 		if (this.IsServer && this.GetComponentInParent<Moon>() != null) {
-			SpawnBeesServerRpc();
+			SpawnBees();
 		}
 	}
 	
@@ -183,32 +183,37 @@ public class Beehive : Scrap {
 	}
 	
 	[ClientRpc]
-	protected virtual void SendBeesClientRpc(NetworkObjectReference beeNetObj) {
-		
+	protected virtual void SendBeesClientRpc(NetworkObjectReference beeNetObj, int behaviourStateIndex) {
+		if (IsServer) return;
+		Plugin.LogFatal($"SendBeesClientRpc");
 		this.bees = ((NetworkObject)beeNetObj).GetComponent<RedLocustBees>();
 		this.bees.hive = this.Grabbable;
 		this.bees.lastKnownHivePosition = this.transform.position;
-		RoundManager.Instance.SpawnedEnemies.Add(this.bees);
+		this.bees.currentBehaviourStateIndex = behaviourStateIndex;
+		this.bees.gameObject.AddComponent<DummyFlag>();
 	}
 	
-	[ServerRpc]
-	protected virtual void SpawnBeesServerRpc() {
+	protected virtual void SpawnBees() {
+		if (!IsServer) return;
+		Plugin.LogFatal("SpawnBees");
+		
 		if (this.beeInfo.IsInvalid) {
 			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);
 		}
 		GameObject g = GameObject.Instantiate(BeesPrefab, this.beeInfo.position, Quaternion.identity);
 		
 		this.bees = g.GetComponent<RedLocustBees>();
-		this.bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
 		
+		// These need to be synced with the client
+		this.bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
 		this.bees.hive = this.Grabbable;
 		this.bees.lastKnownHivePosition = this.transform.position;
-		RoundManager.Instance.SpawnedEnemies.Add(this.bees);
-		
 		g.AddComponent<DummyFlag>();
+		
+		// Only server receives call to SpawnHiveNearEnemy, so only server needs DummyFlag
 		NetworkObject netObj = g.GetComponent<NetworkObject>();
 		netObj.Spawn();
-		SendBeesClientRpc(netObj);
+		this.SendBeesClientRpc(netObj,this.bees.currentBehaviourStateIndex);
 	}
 	
 	public void SaveBees(RedLocustBees bees) {
@@ -449,7 +454,7 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	}
 	
 	protected override T Deserialize(T s, DeserializationContext dc) {
-		s.gameObject.AddComponent<DummyFlag>();
+		// s.gameObject.AddComponent<DummyFlag>();
 		if (parent is DGameMap map) {
 			s.FindParent(map: map);
 		} else {

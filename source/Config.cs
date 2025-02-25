@@ -51,9 +51,9 @@ public sealed class Config {
 	private ConfigEntry<bool> m_EnableHistory;
 	
 	// Features.SetSeed
-	private ConfigEntry<bool> m_UseSetSeed;
-	private ConfigEntry<int > m_Seed;
-	private ConfigEntry<bool> m_IncrementSetSeed;
+	private ConfigEntry<bool>  m_UseSetSeed;
+	private ConfigEntry<int >  m_Seed;
+	private ConfigEntry<bool>  m_IncrementSetSeed;
 	
 	public bool GlobalEnable                 {get => m_GlobalEnable.Value;}
 	
@@ -224,13 +224,13 @@ public sealed class Config {
 		m_BouncyCruisers = Config.Bind(
 			section,
 			"BouncyCruisers",
-			true,
+			false,
 			"NOT YET IMPLEMENTED; "
 		);
 		m_ForbiddenPassages = Config.Bind(
 			section,
 			"ForbiddenPassages",
-			true,
+			false,
 			"NOT YET IMPLEMENTED; "
 		);
 		

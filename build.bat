@@ -1,5 +1,5 @@
-SETLOCAL
 @echo off
+SETLOCAL
 
 set "asm_name=LabyrinthianFacilities.dll"
 
@@ -28,9 +28,9 @@ cd %from_asm_path%
 
 if %1==-r (start %game_dir%/"Lethal Company.exe")
 if %1==-m (
-	start /b /d %game_dir%/"Lethal Company.exe"
+	start %game_dir%/"Lethal Company.exe"
 	timeout /t 5 /nobreak
-	start /b /d %game_dir%/"Lethal Company.exe"
+	start %game_dir%/"Lethal Company.exe"
 )
 
 ENDLOCAL

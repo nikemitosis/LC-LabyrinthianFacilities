@@ -24,11 +24,13 @@ using DunGen.Graph;
 using Random = System.Random;
 using Object = UnityEngine.Object;
 
+using UnityEngine.SceneManagement;
+
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.4.1";
+	public const string VERSION = "0.4.3";
 	
 	public static Plugin Singleton {get; private set;}
 	
@@ -73,6 +75,10 @@ public sealed class Plugin : BaseUnityPlugin {
 		}
 		DeserializationContext.Verbose = cfg.EnableVerboseDeserialization;
 		SerializationContext.Verbose = cfg.EnableVerboseSerialization;
+		
+		SceneManager.sceneLoaded += (Scene scene, LoadSceneMode mode) => {
+			if (scene.name == "SampleSceneRelay") InitializeAssets();
+		};
 		
 		try {
 			NetcodePatch();
@@ -135,9 +141,26 @@ public sealed class Plugin : BaseUnityPlugin {
 		Logger.LogFatal(message);
 	}
 	
-	public static void InitializeAssets() {
+		public static void InitializeAssets() {
 		if (initializedAssets) return;
 		initializedAssets = true;
+		
+		Plugin.LogInfo($"Initializing Miscellaneous Items");
+		foreach (GameObject item in Resources.FindObjectsOfTypeAll(typeof(GameObject))) {
+			if (item.name == "TunnelDeadEndBlockerB") {
+				BoxCollider collider = item.transform.Find("Cube").GetComponent<BoxCollider>();
+				
+				Vector3 vec = collider.center;
+				vec.y = 0;
+				collider.center = vec;
+				
+				vec = collider.size;
+				vec.y = 0;
+				collider.size = vec;
+				
+				break;
+			}
+		}
 		
 		Plugin.LogInfo($"Initializing Tiles");
 		foreach (DunGen.Tile tile in Resources.FindObjectsOfTypeAll(typeof(DunGen.Tile))) {
@@ -196,9 +219,6 @@ public sealed class Plugin : BaseUnityPlugin {
 		foreach (VehicleController vc in Resources.FindObjectsOfTypeAll(typeof(VehicleController))) {
 			if (vc.name == "CompanyCruiser") {
 				vc.gameObject.AddComponent<Cruiser>();
-			} else if (vc.name == "CompanyCruiser(Clone)") { // Clients already loaded spawned NetworkObjects
-				vc.gameObject.AddComponent<Cruiser>();
-				vc.gameObject.AddComponent<DummyFlag>();
 			} else {
 				Plugin.LogWarning(
 					$"Did not recognize vehicle '{vc.name}'. This vehicle will be ignored by {Plugin.NAME}"
@@ -233,6 +253,11 @@ public class MapHandler : NetworkBehaviour {
 			LoadGame();
 		} else {
 			MapHandler.Instance.RequestMapDataServerRpc(NetworkManager.Singleton.LocalClientId);
+			// clear old history
+			if (Config.Singleton.EnableHistory) {
+				FileInfo file = new FileInfo($"{SaveManager.ModSaveDirectory}/serverHistory.log");
+				if (file.Exists) file.Delete();
+			}
 		}
 		
 	}
@@ -372,7 +397,7 @@ public class MapHandler : NetworkBehaviour {
 	public void Clear() {
 		if (!base.IsServer) return;
 		this.GetComponent<NetworkObject>().Despawn();
-		SaveManager.DeleteFile($"{SaveManager.CurrentSave}.dat");
+		SaveManager.DeleteFile($"{SaveManager.CurrentSave}.dat",true);
 		GameObject.Instantiate(MapHandler.prefab).GetComponent<NetworkObject>().Spawn();
 	}
 	
@@ -426,21 +451,10 @@ public class MapHandler : NetworkBehaviour {
 		Plugin.LogInfo($"Done syncing with server!");
 	}
 	
-	internal void DebugSave() {
-		var s = new SerializationContext();
-		s.Serialize(this, new MapHandlerSerializer());
-		byte[] bytes = new byte[s.Output.Count];
-		s.Output.CopyTo(bytes,0);
-		using (FileStream fs = File.Open($"{SaveManager.ModSaveDirectory}/debug.dat", FileMode.Create)) {
-			foreach (byte b in bytes) {
-				fs.WriteByte(b);
-			}
-		}
-	}
-	
-	internal void RecordDay(int modSeed) {
+	private void RecordDay(int modSeed) {
+		string savename = this.IsServer ? SaveManager.CurrentSave : "server";
 		using (FileStream fs = File.Open(
-			$"{SaveManager.ModSaveDirectory}/{SaveManager.CurrentSave}History.log", FileMode.Append
+			$"{SaveManager.ModSaveDirectory}/{savename}History.log", FileMode.Append
 		)) {
 			fs.Write((
 				$"Q{TimeOfDay.Instance.timesFulfilledQuota+1} D{4-TimeOfDay.Instance.daysUntilDeadline}\n"
@@ -603,9 +617,18 @@ internal static class SaveManager {
 		} catch (Exception ex) {
 			Plugin.LogError($"Error when renaming file {oldName} to {newName}: \n{ex.Message}");
 		}
+		
+		// rename history, if it exists
+		file = new FileInfo($"{ModSaveDirectory}/{oldName.Substring(0,oldName.Length-4)}History.log");
+		if (!file.Exists) return;
+		try {
+			file.MoveTo($"{ModSaveDirectory}/{newName.Substring(0,newName.Length-4)}History.log");
+		} catch (Exception ex) {
+			Plugin.LogError($"Error when renaming file history {oldName} to {newName}: \n{ex.Message}");
+		}
 	}
 	
-	public static void DeleteFile(string saveName) {
+	public static void DeleteFile(string saveName, bool isGameOver=false) {
 		if (saveName.Contains("..")) throw new IOException("Miss me with that shit");
 		var file = new FileInfo($"{ModSaveDirectory}/{saveName}");
 		if (!file.Exists) {
@@ -616,6 +639,7 @@ internal static class SaveManager {
 		file.Delete();
 		
 		// delete history, if it exists
+		if (isGameOver) return;
 		file = new FileInfo($"{ModSaveDirectory}/{saveName.Substring(0,saveName.Length-4)}History.log");
 		if (!file.Exists) return;
 		file.Delete();
