@@ -120,9 +120,9 @@ class PreserveScrapPatch {
 	
 	[HarmonyPatch("UnloadSceneObjectsEarly")]
 	[HarmonyPrefix]
-	public static void PreserveEnemies() {
+	public static void PreserveEarlyObjects() {
 		try {
-			MapHandler.Instance.PreserveBees();
+			MapHandler.Instance.PreserveEarlyObjects();
 		} catch (Exception e) {
 			Plugin.LogError($"{e}");
 			throw;
@@ -221,29 +221,12 @@ public class RespawnBeesPatch {
 	[HarmonyPatch("Start")]
 	[HarmonyPostfix]
 	public static void SetHasSpawnedHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
-		Plugin.LogFatal("SetHasSpawnedHive Attempt");
 		var flag = __instance.GetComponent<DummyFlag>();
 		if (flag == null) return;
 		Plugin.LogFatal("SetHasSpawnedHive");
 		MonoBehaviour.Destroy(flag);
 		
 		___hasSpawnedHive = true;
-	} 
-	
-	[HarmonyPatch(typeof(EnemyAI),"StartSearch")]
-	[HarmonyPrefix]
-	public static void SaySearch(EnemyAI __instance, Vector3 startOfSearch, AISearchRoutine newSearch) {
-		if (__instance is RedLocustBees bees) Plugin.LogFatal(
-			$"Searching @ {startOfSearch} - isNull: {newSearch == null} "
-			+$"isHiveSearch: {newSearch == bees.searchForHive}"
-		);
-	}
-	
-	[HarmonyPatch("SwitchOwnershipOfBeesToClient")]
-	[HarmonyPrefix]
-	public static void SwitchOwnership(RedLocustBees __instance, PlayerControllerB player) {
-		Plugin.LogFatal($"Switching ownership to {player.playerUsername}");
-		Plugin.LogFatal($"state - {__instance.currentBehaviourStateIndex}");
 	}
 }
 

@@ -185,7 +185,6 @@ public class Beehive : Scrap {
 	[ClientRpc]
 	protected virtual void SendBeesClientRpc(NetworkObjectReference beeNetObj, int behaviourStateIndex) {
 		if (IsServer) return;
-		Plugin.LogFatal($"SendBeesClientRpc");
 		this.bees = ((NetworkObject)beeNetObj).GetComponent<RedLocustBees>();
 		this.bees.hive = this.Grabbable;
 		this.bees.lastKnownHivePosition = this.transform.position;
@@ -195,7 +194,6 @@ public class Beehive : Scrap {
 	
 	protected virtual void SpawnBees() {
 		if (!IsServer) return;
-		Plugin.LogFatal("SpawnBees");
 		
 		if (this.beeInfo.IsInvalid) {
 			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);

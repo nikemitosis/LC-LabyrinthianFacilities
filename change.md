@@ -12,6 +12,7 @@
    - While this wasn't unintended per-se, it was causing an issue with some network-related objects not being initialized properly on those already-spawned assets. 
  - #33 Fixed a bug where bees spawned by the mod would pathfind to (0,0,0) if they tried to chase a non-host client
    - This was because `RedLocustBees.hasSpawnedHive` was only initialized server-side. 
+ - Fixed a bug where cruiser would be despawned too late and fall through the map
 
 ## Technical
  - Reintroduced a developer-side setseed through preprocessor flag `SeedOverride`

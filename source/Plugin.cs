@@ -341,8 +341,8 @@ public class MapHandler : NetworkBehaviour {
 		this.ActiveMoon?.PreserveMapObjects();
 	}
 	
-	public void PreserveBees() {
-		this.ActiveMoon?.PreserveBees();
+	public void PreserveEarlyObjects() {
+		this.ActiveMoon?.PreserveEarlyObjects();
 	}
 	
 	public void DestroyAllScrap() {
@@ -541,16 +541,18 @@ public class Moon : MonoBehaviour {
 	public void PreserveMapObjects() {
 		Plugin.LogInfo("Hiding Map Objects!");
 		this.ActiveMap?.PreserveMapObjects();
-		
-		foreach (var cruiser in Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None)) {
-			cruiser.Preserve();
-		}
 	}
 	
-	public void PreserveBees() {
-		if (!Config.Singleton.SaveHives) return;
-		foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
-			bee.hive.GetComponent<Beehive>().SaveBees(bee);
+	public void PreserveEarlyObjects() {
+		if (Config.Singleton.SaveHives) {
+			foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
+				bee.hive.GetComponent<Beehive>().SaveBees(bee);
+			}
+		}
+		if (Config.Singleton.SaveCruisers) {
+			foreach (Cruiser cruiser in Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None)) {
+				cruiser.Preserve();
+			}
 		}
 	}
 	

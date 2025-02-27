@@ -542,9 +542,9 @@ public class DungeonFlowConverter : ITileGenerator {
 			
 			// this makes a *doorway's* chance of being chosen proportional to how many doorways in the 
 			// archetype share its size
-			// It does *not* make a given size have a chance of being chosen proportional to how many 
+			// It does *not* make a given *size* have a chance of being chosen proportional to how many 
 			// doorways in the archetype have that size
-			// i.e. if you have a million doors of size A and one door of size B, you're *still* 
+			// e.g. if you have a million doors of size A and one door of size B, you're *still* 
 			// going to get a door of size A most of the time, even if the archetype's doors are 99% size B
 			IChoice<Doorway,float> roots = doorwayManager.GetLeaves(
 				(Doorway d) => (float)archetype.GetDoorwayCountBySize(d.Size)
@@ -552,7 +552,7 @@ public class DungeonFlowConverter : ITileGenerator {
 			
 			foreach (var entry in ((WeightedList<Doorway>)roots).Entries) {
 				if (entry.item == null) {
-					Plugin.LogFatal($"null leaf");
+					Plugin.LogError($"null leaf");
 					break;
 				}
 			}
