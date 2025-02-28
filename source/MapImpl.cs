@@ -599,24 +599,21 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 		}
 	}
 	
-	private void SerializeMapObjects<T>(
-		SerializationContext sc, 
-		DGameMap map, 
-		ISerializer<T> ser
-	) where T : MapObject {
-		T[] objs = map.GetComponentsInChildren<T>(includeInactive: true);
-		sc.Add(((ushort)objs.Length).GetBytes());
-		foreach (T o in objs) {
-			sc.AddInline(o, ser);
-		}
-	}
-	
 	public override void Serialize(SerializationContext sc, DGameMap tgt) {
 		base.TileSer = new DTileSerializer(tgt);
 		base.Serialize(sc,tgt);
 		
-		SerializeMapObjects<Scrap>(sc,tgt,new ScrapSerializer((Moon)null));
-		SerializeMapObjects<Equipment>(sc,tgt,new EquipmentSerializer((Moon)null));
+		new MapObjectCollection(tgt).Serialize(
+			sc,
+			new ScrapSerializer           /* <Scrap> */     (tgt),
+			new EquipmentSerializer       <Equipment>       (tgt),
+			new BatteryEquipmentSerializer<BatteryEquipment>(tgt),
+			new GunEquipmentSerializer    <GunEquipment>    (tgt),
+			new BatteryEquipmentSerializer<FueledEquipment> (tgt)
+		);
+		
+		// Hazards
+		sc.Add((ushort)0);
 	}
 	
 	protected override DGameMap Deserialize(
@@ -624,8 +621,17 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	) {
 		base.TileSer = new DTileSerializer(rt);
 		base.Deserialize(rt,dc);
-		DeserializeMapObjects<Scrap    >(new ScrapSerializer    (rt),dc);
-		DeserializeMapObjects<Equipment>(new EquipmentSerializer(rt),dc);
+		
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapSerializer           /* <Scrap> */     (rt),
+			new EquipmentSerializer       <Equipment>       (rt),
+			new BatteryEquipmentSerializer<BatteryEquipment>(rt),
+			new GunEquipmentSerializer    <GunEquipment>    (rt),
+			new BatteryEquipmentSerializer<FueledEquipment> (rt)
+		);
+		
+		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
 		
 		return rt;
 	}
@@ -744,41 +750,32 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		this.Moon = m;
 	}
 	
-	private void SerializeMapObjects<T>(SerializationContext sc, DGameMap map, ISerializer<T> serializer) 
-		where T : MapObject 
-	{
-		T[] objs = map.GetComponentsInChildren<T>(includeInactive: true);
-		sc.Add((ushort)objs.Length);
-		foreach (T o in objs) {
-			sc.AddInline(o,serializer);
-		}
-	}
-	
 	public override void Serialize(SerializationContext sc, DGameMap m) {
 		sc.Add(m.name+"\0");
 		
-		SerializeMapObjects<Scrap>(sc, m, new ScrapNetworkSerializer((Moon)null));
-		SerializeMapObjects<Equipment>(sc, m, new EquipmentNetworkSerializer((Moon)null));
-	}
-	
-	private void DeserializeMapObjects<T>(
-		DGameMap map, DeserializationContext dc, ISerializer<T> ds
-	)
-		where T : MapObject
-	{
-		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		if (DeserializationContext.Verbose) Plugin.LogDebug(
-			$"Loading {count} {typeof(T)} objects for DGameMap '{map.name}' from address 0x{dc.Address:X}"
+		new MapObjectCollection(m).Serialize(
+			sc,
+			new ScrapNetworkSerializer           /*<Scrap>*/       (m),
+			new MapObjectNetworkSerializer       <Equipment>       (m),
+			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(m),
+			new GunEquipmentNetworkSerializer    <GunEquipment>    (m),
+			new BatteryEquipmentNetworkSerializer<FueledEquipment> (m)
 		);
 		
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds);
-		}
+		sc.Add((ushort)0);
 	}
 	
 	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc) {
-		DeserializeMapObjects<Scrap    >(map, dc, new ScrapNetworkSerializer(map));
-		DeserializeMapObjects<Equipment>(map, dc, new EquipmentNetworkSerializer(map));
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapNetworkSerializer           /*<Scrap>*/       (map),
+			new MapObjectNetworkSerializer       <Equipment>       (map),
+			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(map),
+			new GunEquipmentNetworkSerializer    <GunEquipment>    (map),
+			new BatteryEquipmentNetworkSerializer<FueledEquipment> (map)
+		);
+		
+		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
 		
 		return map;
 	}

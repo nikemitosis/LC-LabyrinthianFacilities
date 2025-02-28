@@ -1,4 +1,5 @@
 namespace LabyrinthianFacilities;
+using Patches;
 
 using System;
 using System.Collections.Generic;
@@ -11,6 +12,15 @@ using Serialization;
 using Util;
 
 using Object=UnityEngine.Object;
+
+
+// maybe revert to using GrabbableObject directly? 
+// We could differentiate the different types the same way lethal does, including during serialization
+// It would eliminate the need to have all these separate arrays in serialization for all the different 
+// kinds of mapObjects. 
+// It would also allow for things like a shotgun with a battery. The base game doesn't have that, but a mod 
+// sure could?
+// I *do* dislike how lethal handles consumable items, though (tetra, spraypaint)
 
 public class MapObject : NetworkBehaviour {
 	public GrabbableObject Grabbable {get {
@@ -253,6 +263,29 @@ public class Equipment : MapObject {
 	}
 }
 
+public class BatteryEquipment : Equipment {
+	public virtual float Charge {
+		get => this.Grabbable.insertedBattery.charge;
+		set => this.Grabbable.insertedBattery.charge = value;
+	}
+}
+public class GunEquipment : Equipment {
+	public virtual bool Safety {
+		get => ((ShotgunItem)this.Grabbable).safetyOn;
+		set => ((ShotgunItem)this.Grabbable).safetyOn = value;
+	}
+	public virtual int NumShells {
+		get => ((ShotgunItem)this.Grabbable).shellsLoaded;
+		set => ((ShotgunItem)this.Grabbable).shellsLoaded = value;
+	}
+}
+public class FueledEquipment : BatteryEquipment {
+	public override float Charge {
+		get => FuelAccess.Get(this.Grabbable);
+		set => FuelAccess.Set(this.Grabbable,value);
+	}
+}
+
 // Bypassing Netcode's requirement that NetworkObjects must be parented under other NetworkObjects
 // (I didn't want moons to be server-managed just to take advantage of unity's parenting for cruisers)
 public class Cruiser : NetworkBehaviour {
@@ -334,7 +367,92 @@ public class Cruiser : NetworkBehaviour {
 	}
 }
 
-// extraContext is object that this is parented to
+public struct MapObjectCollection {
+	
+	public List<Scrap>            Scrap;
+	public List<Equipment>        Equipment;
+	public List<BatteryEquipment> BatteryEquipment;
+	public List<GunEquipment>     GunEquipment;
+	public List<FueledEquipment>  FueledEquipment;
+	
+	public MapObjectCollection(Component c, bool includeInactive=true) : this(c.gameObject,includeInactive) {}
+	public MapObjectCollection(GameObject root, bool includeInactive=true) : this(
+		root.GetComponentsInChildren<MapObject>(includeInactive)
+	) {}
+	public MapObjectCollection(ICollection<MapObject> mapObjects) {
+		this.Scrap            = new(mapObjects.Count);
+		this.Equipment        = new(mapObjects.Count);
+		this.BatteryEquipment = new(mapObjects.Count);
+		this.GunEquipment     = new(mapObjects.Count);
+		this.FueledEquipment  = new(mapObjects.Count);
+		foreach (MapObject mo in mapObjects) {
+			if (mo is Scrap s) {
+				Scrap.Add(s);
+			} else if (mo is GunEquipment ge) {
+				GunEquipment.Add(ge);
+			} else if (mo is BatteryEquipment be) {
+				BatteryEquipment.Add(be);
+			} else if (mo is FueledEquipment fe) {
+				FueledEquipment.Add(fe);
+			} else if (mo is Equipment e) {
+				Equipment.Add(e);
+			} else {
+				Plugin.LogError($"MapObject {mo} is neither Scrap nor Equipment?");
+			}
+		}
+	}
+	
+	public void Serialize(
+		SerializationContext sc, 
+		ISerializer<Scrap> ss, 
+		ISerializer<Equipment> es, 
+		ISerializer<BatteryEquipment> bes,
+		ISerializer<GunEquipment> ges,
+		ISerializer<FueledEquipment> fes
+	) {
+		sc.Add((ushort)this.Scrap.Count);
+		foreach (var s in this.Scrap) {
+			sc.AddInline(s,ss);
+		}
+		
+		sc.Add((ushort)this.Equipment.Count);
+		foreach (var eq in this.Equipment) {
+			sc.AddInline(eq,es);
+		}
+		
+		sc.Add((ushort)this.BatteryEquipment.Count);
+		foreach (var eq in this.BatteryEquipment) {
+			sc.AddInline(eq,bes);
+		}
+		
+		sc.Add((ushort)this.GunEquipment.Count);
+		foreach (var eq in this.GunEquipment) {
+			sc.AddInline(eq,ges);
+		}
+		
+		sc.Add((ushort)this.FueledEquipment.Count);
+		foreach (var eq in this.FueledEquipment) {
+			sc.AddInline(eq,fes);
+		}
+	}
+	
+	public static void Deserialize(
+		DeserializationContext dc,
+		ISerializer<Scrap> ss, 
+		ISerializer<Equipment> es, 
+		ISerializer<BatteryEquipment> bes,
+		ISerializer<GunEquipment> ges,
+		ISerializer<FueledEquipment> fes
+	) {
+		foreach (ISerializer<MapObject> s in (ISerializer<MapObject>[])[ss,es,bes,ges,fes]) {
+			dc.Consume(sizeof(ushort)).CastInto(out ushort count);
+			for (int i=0; i<count; i++) {
+				dc.ConsumeInline(s);
+			}
+		}
+	}
+}
+
 public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
@@ -423,23 +541,62 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	}
 }
 
-public class EquipmentSerializer : MapObjectSerializer<Equipment> {
+public class EquipmentSerializer<T> : MapObjectSerializer<T> where T : Equipment{
 	public EquipmentSerializer(Moon     p) : base(p) {}
 	public EquipmentSerializer(DGameMap p) : base(p) {}
 	public EquipmentSerializer(Cruiser  p) : base(p) {}
 	
-	public override Equipment GetPrefab(string id) => Equipment.GetPrefab(id);
+	public override T GetPrefab(string id) => (T)Equipment.GetPrefab(id);
+}
+
+public class BatteryEquipmentSerializer<T> : EquipmentSerializer<T> where T : BatteryEquipment {
 	
-	public override void Serialize(SerializationContext sc, Equipment eq) => base.Serialize(sc,eq);
+	public BatteryEquipmentSerializer(Moon     p) : base(p) {}
+	public BatteryEquipmentSerializer(DGameMap p) : base(p) {}
+	public BatteryEquipmentSerializer(Cruiser  p) : base(p) {}
+	
+	public override void Serialize(SerializationContext sc, T tgt) {
+		base.Serialize(sc,tgt);
+		sc.Add(tgt.Charge);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		base.Deserialize(rt,dc);
+		dc.Consume(sizeof(float)).CastInto(out float charge);
+		if (rt != null) rt.Charge = charge;
+		return rt;
+	}
+}
+
+public class GunEquipmentSerializer<T> : EquipmentSerializer<T> where T : GunEquipment {
+	
+	public GunEquipmentSerializer(Moon     p) : base(p) {}
+	public GunEquipmentSerializer(DGameMap p) : base(p) {}
+	public GunEquipmentSerializer(Cruiser  p) : base(p) {}
+	
+	public override void Serialize(SerializationContext sc, T tgt) {
+		base.Serialize(sc,tgt);
+		sc.Add(tgt.Safety);
+		sc.Add(tgt.NumShells);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		base.Deserialize(rt,dc);
+		dc.Consume(sizeof(bool)).CastInto(out bool safety);
+		dc.Consume(sizeof(int)).CastInto(out int numShells);
+		if (rt == null) return null;
+		rt.Safety = safety;
+		rt.NumShells = numShells;
+		return rt;
+	}
 }
 
 public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
-	private MonoBehaviour parent;
-	public MonoBehaviour Parent {get => parent;}
+	public MonoBehaviour Parent {get; private set;}
 	
-	public MapObjectNetworkSerializer(Moon     p) {this.parent = p;}
-	public MapObjectNetworkSerializer(DGameMap p) {this.parent = p;}
-	public MapObjectNetworkSerializer(Cruiser  p) {this.parent = p;}
+	public MapObjectNetworkSerializer(Moon     p) {this.Parent = p;}
+	public MapObjectNetworkSerializer(DGameMap p) {this.Parent = p;}
+	public MapObjectNetworkSerializer(Cruiser  p) {this.Parent = p;}
 	
 	public override void Serialize(SerializationContext sc, T obj) {
 		var netObj = obj.GetComponent<NetworkObject>();
@@ -453,10 +610,10 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	
 	protected override T Deserialize(T s, DeserializationContext dc) {
 		// s.gameObject.AddComponent<DummyFlag>();
-		if (parent is DGameMap map) {
+		if (Parent is DGameMap map) {
 			s.FindParent(map: map);
 		} else {
-			s.transform.parent = this.parent.transform;
+			s.transform.parent = this.Parent.transform;
 		}
 		
 		s.Grabbable.startFallingPosition = (
@@ -499,10 +656,42 @@ public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
 	}
 }
 
-public class EquipmentNetworkSerializer : MapObjectNetworkSerializer<Equipment> {
-	public EquipmentNetworkSerializer(Moon     p) : base(p) {}
-	public EquipmentNetworkSerializer(DGameMap p) : base(p) {}
-	public EquipmentNetworkSerializer(Cruiser  p) : base(p) {}
+public class BatteryEquipmentNetworkSerializer<T> : MapObjectNetworkSerializer<T> where T : BatteryEquipment {
+	public BatteryEquipmentNetworkSerializer(Moon     p) : base(p) {}
+	public BatteryEquipmentNetworkSerializer(DGameMap p) : base(p) {}
+	public BatteryEquipmentNetworkSerializer(Cruiser  p) : base(p) {}
+	
+	public override void Serialize(SerializationContext sc, T tgt) {
+		base.Serialize(sc,tgt);
+		sc.Add(tgt.Charge);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		base.Deserialize(rt,dc);
+		dc.Consume(sizeof(float)).CastInto(out float charge);
+		rt.Charge = charge;
+		return rt;
+	}
+}
+public class GunEquipmentNetworkSerializer<T> : MapObjectNetworkSerializer<T> where T : GunEquipment {
+	public GunEquipmentNetworkSerializer(Moon     p) : base(p) {}
+	public GunEquipmentNetworkSerializer(DGameMap p) : base(p) {}
+	public GunEquipmentNetworkSerializer(Cruiser  p) : base(p) {}
+	
+	public override void Serialize(SerializationContext sc, T tgt) {
+		base.Serialize(sc,tgt);
+		sc.Add(tgt.Safety);
+		sc.Add(tgt.NumShells);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		base.Deserialize(rt,dc);
+		dc.Consume(sizeof(bool)).CastInto(out bool safety);
+		dc.Consume(sizeof(int)).CastInto(out int numShells);
+		rt.Safety = safety;
+		rt.NumShells = numShells;
+		return rt;
+	}
 }
 
 // This will break with other vehicles, either modded or added into the game 
@@ -517,6 +706,8 @@ public class CruiserSerializer : Serializer<Cruiser> {
 	 *   Quaternion x,y,z,w
 	 *   Scrap[] scrap
 	 *   Equipment[] equipment
+	 *   BatteryEquipment[] batteryEquipment
+	 *   GunEquipment[] gunEquipment
 	*/
 	public override void Serialize(SerializationContext sc, Cruiser cruiser) {
 		sc.Add(cruiser.transform.position.x);
@@ -528,19 +719,14 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		sc.Add(cruiser.transform.rotation.z);
 		sc.Add(cruiser.transform.rotation.w);
 		
-		Scrap[] scrap = cruiser.GetComponentsInChildren<Scrap>(true);
-		ScrapSerializer scrapSer = new ScrapSerializer((Moon)null);
-		sc.Add((ushort)scrap.Length);
-		foreach (Scrap s in scrap) {
-			sc.AddInline(s,scrapSer);
-		}
-		
-		Equipment[] equipment = cruiser.GetComponentsInChildren<Equipment>(true);
-		EquipmentSerializer eqSer = new((Moon)null);
-		sc.Add((ushort)equipment.Length);
-		foreach (Equipment eq in equipment) {
-			sc.AddInline(eq,eqSer);
-		}
+		new MapObjectCollection(cruiser).Serialize(
+			sc,
+			new ScrapSerializer           /* Scrap */       (cruiser),
+			new EquipmentSerializer       <Equipment>       (cruiser),
+			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
+			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
+			new BatteryEquipmentSerializer<FueledEquipment> (cruiser)
+		);
 	}
 	
 	protected override Cruiser Deserialize(
@@ -565,24 +751,21 @@ public class CruiserSerializer : Serializer<Cruiser> {
 			cruiser.transform.rotation = rot;
 		}
 		
-		dc.Consume(2).CastInto(out ushort count);
-		var scrapSer = new ScrapSerializer(cruiser);
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(scrapSer);
-		}
-		
-		dc.Consume(2).CastInto(out count);
-		var eqSer = new EquipmentSerializer(cruiser);
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(eqSer);
-		}
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapSerializer           /* <Scrap> */     (cruiser),
+			new EquipmentSerializer       <Equipment>       (cruiser),
+			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
+			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
+			new BatteryEquipmentSerializer<FueledEquipment> (cruiser)
+		);
 		
 		return cruiser;
 	}
 	
 	public override Cruiser Deserialize(DeserializationContext dc) {
 		Cruiser rt = null;
-		if (NetworkManager.Singleton.IsServer || NetworkManager.Singleton.IsHost) {
+		if (NetworkManager.Singleton.IsServer) {
 			var g = GameObject.Instantiate(Cruiser.Prefab);
 			g.AddComponent<DummyFlag>();
 			g.GetComponent<NetworkObject>().Spawn();
@@ -615,19 +798,14 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		sc.Add(tgt.transform.rotation.z);
 		sc.Add(tgt.transform.rotation.w);
 		
-		Scrap[] scrap = tgt.GetComponentsInChildren<Scrap>(true);
-		sc.Add((ushort)scrap.Length);
-		var scrapSerializer = new ScrapNetworkSerializer((Moon)null);
-		foreach (Scrap s in scrap) {
-			sc.AddInline(s,scrapSerializer);
-		}
-		
-		Equipment[] equipment = tgt.GetComponentsInChildren<Equipment>(true);
-		sc.Add((ushort)equipment.Length);
-		var eqSerializer = new EquipmentNetworkSerializer((Moon)null);
-		foreach (Equipment eq in equipment) {
-			sc.AddInline(eq,eqSerializer);
-		}
+		new MapObjectCollection(tgt).Serialize(
+			sc,
+			new ScrapNetworkSerializer                             (tgt),
+			new MapObjectNetworkSerializer       <Equipment>       (tgt),
+			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(tgt),
+			new GunEquipmentNetworkSerializer    <GunEquipment>    (tgt),
+			new BatteryEquipmentNetworkSerializer<FueledEquipment> (tgt)
+		);
 	}
 	
 	protected override Cruiser Deserialize(Cruiser tgt, DeserializationContext dc) {
@@ -654,17 +832,14 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		dc.Consume(sizeof(float)).CastInto(out float w);
 		tgt.transform.rotation = new Quaternion(x,y,z,w);
 		
-		dc.Consume(2).CastInto(out ushort numScrap);
-		var scrapSerializer = new ScrapNetworkSerializer(tgt);
-		for (ushort i=0; i<numScrap; i++) {
-			dc.ConsumeInline(scrapSerializer);
-		}
-		
-		dc.Consume(2).CastInto(out ushort numEquipment);
-		var equipmentSerializer = new EquipmentNetworkSerializer(tgt);
-		for (ushort i=0; i<numEquipment; i++) {
-			dc.ConsumeInline(equipmentSerializer);
-		}
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapNetworkSerializer           /* <Scrap> */     (tgt),
+			new MapObjectNetworkSerializer       <Equipment>       (tgt),
+			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(tgt),
+			new GunEquipmentNetworkSerializer    <GunEquipment>    (tgt),
+			new BatteryEquipmentNetworkSerializer<FueledEquipment> (tgt)
+		);
 		
 		return tgt;
 	}

@@ -25,8 +25,8 @@ public abstract class Serializer<T> : ISerializer<T> {
 	
 	// ISerializer.Deserialize
 	// Intended to instantiate some kind of prefab or default object, and initialize it with above
-	// Not intended to be used by inheritors, just for DeserializationContext
-	public abstract T Deserialize(DeserializationContext dcl);
+	// Not intended to be called by inheritors, just for DeserializationContext
+	public abstract T Deserialize(DeserializationContext dc);
 	
 	// The bulk of deserialization should occur here
 	protected abstract T Deserialize(T baseObject, DeserializationContext dc);

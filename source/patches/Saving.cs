@@ -93,3 +93,30 @@ public class CruiserLoadPatch {
 		StartOfRound.Instance.inShipPhase = OldState;
 	}
 }
+
+public class FuelAccess {
+	private static Traverse<float> field(TetraChemicalItem i) => new Traverse(i).Field<float>("fuel");
+	public static float Get(TetraChemicalItem item) => field(item).Value;
+	public static void Set(TetraChemicalItem item, float value) => field(item).Value = value;
+	
+	private static Traverse<float> field(SprayPaintItem i) => new Traverse(i).Field<float>("sprayCanTank");
+	public static float Get(SprayPaintItem item) => field(item).Value;
+	public static void Set(SprayPaintItem item, float value) => field(item).Value = value;
+	
+	public static float Get(GrabbableObject item) {
+		if (item is TetraChemicalItem tc) return Get(tc);
+		if (item is SprayPaintItem sp) return Get(sp);
+		throw new InvalidCastException($"Supposed FueledEquipment is neither TZP nor Spraypaint/Weedkiller");
+	}
+	public static void Set(GrabbableObject item, float value) {
+		if (item is TetraChemicalItem tc) {
+			Set(tc,value);
+			return;
+		}
+		if (item is SprayPaintItem sp) {
+			Set(sp,value);
+			return;
+		}
+		throw new InvalidCastException($"Supposed FueledEquipment is neither TZP nor Spraypaint/Weedkiller");
+	}
+}

@@ -41,6 +41,7 @@ public sealed class Plugin : BaseUnityPlugin {
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
 	private static uint PROMOTE_LOG = 0;
+	public static bool TreatWarningsAsErrors = true;
 	
 	// if other modders want to make this thing shut the fuck up, set this higher
 	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
@@ -122,7 +123,7 @@ public sealed class Plugin : BaseUnityPlugin {
 	}
 	public static void LogWarning(string message) {
 		if (MIN_LOG > 3) return;
-		if (PROMOTE_LOG > 3) {
+		if (PROMOTE_LOG > 3 || TreatWarningsAsErrors) {
 			LogError(message);
 			return;
 		}
@@ -141,7 +142,7 @@ public sealed class Plugin : BaseUnityPlugin {
 		Logger.LogFatal(message);
 	}
 	
-		public static void InitializeAssets() {
+	public static void InitializeAssets() {
 		if (initializedAssets) return;
 		initializedAssets = true;
 		
@@ -211,7 +212,15 @@ public sealed class Plugin : BaseUnityPlugin {
 				// exclude maneater (and hopefully catch custom enemies with a similar gimmick)
 				grabbable.GetComponent<EnemyAI>() == null 
 			) {
-				grabbable.gameObject.AddComponent<Equipment>();
+				if (grabbable.itemProperties.requiresBattery) {
+					grabbable.gameObject.AddComponent<BatteryEquipment>();
+				} else if (grabbable is ShotgunItem) {
+					grabbable.gameObject.AddComponent<GunEquipment>();
+				} else if (grabbable is SprayPaintItem || grabbable is TetraChemicalItem) {
+					grabbable.gameObject.AddComponent<FueledEquipment>();
+				} else {
+					grabbable.gameObject.AddComponent<Equipment>();
+				}
 			}
 		}
 	
@@ -753,28 +762,23 @@ public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 }
 
 public class MoonSerializer : Serializer<Moon> {
-	private void SerializeMapObjects<T>(
-		SerializationContext sc, 
-		Moon moon, 
-		Serializer<T> ser
-	) where T : MapObject {
-		List<T> objs = new(moon.transform.childCount);
-		foreach (Transform child in moon.transform) {
-			T item = child.GetComponent<T>();
-			if (item != null) objs.Add(item);
-		}
-		sc.Add((ushort)objs.Count);
-		foreach (T o in objs) {
-			sc.AddInline(o, ser);
-		}
-	}
-	
 	public override void Serialize(SerializationContext sc, Moon moon) {
 		sc.Add(moon.name + "\0");
 		
 		// Serialize MapObjects
-		SerializeMapObjects<Scrap>(sc,moon,new ScrapSerializer(moon));
-		SerializeMapObjects<Equipment>(sc,moon,new EquipmentSerializer(moon));
+		List<MapObject> mapObjects = new(moon.transform.childCount);
+		foreach (Transform child in moon.transform) {
+			MapObject item = child.GetComponent<MapObject>();
+			if (item != null) mapObjects.Add(item);
+		}
+		new MapObjectCollection(mapObjects).Serialize(
+			sc,
+			new ScrapSerializer           /* <Scrap> */     (moon),
+			new EquipmentSerializer       <Equipment       >(moon),
+			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
+			new GunEquipmentSerializer    <GunEquipment    >(moon),
+			new BatteryEquipmentSerializer<FueledEquipment >(moon)
+		);
 		
 		// Serialize cruisers
 		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
@@ -793,25 +797,16 @@ public class MoonSerializer : Serializer<Moon> {
 		}
 	}
 	
-	private void DeserializeMapObjects<T>(
-		DeserializationContext dc, MapObjectSerializer<T> ds
-	)
-		where T : MapObject
-	{
-		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		if (DeserializationContext.Verbose) Plugin.LogDebug(
-			$"Loading {count} {typeof(T)} objects for Moon '{ds.Parent.name}' from address 0x{dc.Address:X}"
-		);
-		
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds);
-		}
-	}
-	
 	protected override Moon Deserialize(Moon moon, DeserializationContext dc) {
 		
-		DeserializeMapObjects<Scrap    >(dc,new ScrapSerializer    (moon));
-		DeserializeMapObjects<Equipment>(dc,new EquipmentSerializer(moon));
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapSerializer           /* <Scrap> */     (moon),
+			new EquipmentSerializer       <Equipment>       (moon),
+			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
+			new GunEquipmentSerializer    <GunEquipment>    (moon),
+			new BatteryEquipmentSerializer<FueledEquipment> (moon)
+		);
 		
 		dc.Consume(2).CastInto(out ushort numCruisers);
 		var cruiserSerializer = new CruiserSerializer(moon);
@@ -864,8 +859,19 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		sc.Add(moon.name+"\0");
 		
 		// MapObjects
-		SerializeMapObjects<Scrap    >(sc,moon, new ScrapNetworkSerializer(moon));
-		SerializeMapObjects<Equipment>(sc,moon, new EquipmentNetworkSerializer(moon));
+		List<MapObject> mapObjects = new(moon.transform.childCount);
+		foreach (Transform child in moon.transform) {
+			MapObject item = child.GetComponent<MapObject>();
+			if (item != null) mapObjects.Add(item);
+		}
+		new MapObjectCollection(mapObjects).Serialize(
+			sc,
+			new ScrapNetworkSerializer                      (moon),
+			new MapObjectNetworkSerializer<Equipment>       (moon),
+			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
+			new MapObjectNetworkSerializer<GunEquipment>    (moon),
+			new MapObjectNetworkSerializer<FueledEquipment> (moon)
+		);
 		
 		// Cruisers
 		Cruiser[] cruisers = moon.GetComponentsInChildren<Cruiser>(true);
@@ -901,8 +907,14 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	
 	protected override Moon Deserialize(Moon moon, DeserializationContext dc) {
 		// MapObjects
-		DeserializeMapObjects<Scrap    >(dc, new ScrapNetworkSerializer    (moon));
-		DeserializeMapObjects<Equipment>(dc, new EquipmentNetworkSerializer(moon));
+		MapObjectCollection.Deserialize(
+			dc,
+			new ScrapNetworkSerializer                      (moon),
+			new MapObjectNetworkSerializer<Equipment>       (moon),
+			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
+			new MapObjectNetworkSerializer<GunEquipment>    (moon),
+			new MapObjectNetworkSerializer<FueledEquipment> (moon)
+		);
 		
 		// Cruisers
 		dc.Consume(2).CastInto(out ushort numCruisers);
