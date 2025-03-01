@@ -667,9 +667,14 @@ internal static class SaveManager {
 			try {
 				id = int.Parse(modsave.Name.Substring(10, modsave.Name.Length-14));
 			} catch (FormatException) {
-				Plugin.LogWarning(
-					$"{typeof(SaveManager)} does not know how to sync save '{modsave.Name}'"
-				);
+				if (
+					modsave.Name != "serverHistory.log"
+					&& modsave.Name.Substring(11) != "History.log"
+				) {
+					Plugin.LogWarning(
+						$"{typeof(SaveManager)} does not know how to sync save '{modsave.Name}'"
+					);
+				}
 				continue;
 			}
 			

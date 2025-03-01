@@ -73,6 +73,7 @@ class ModifyFilePatch {
 
 [HarmonyPatch(typeof(VehicleController))]
 public class CruiserLoadPatch {
+	
 	private static bool OldState;
 	[HarmonyPatch("Start")]
 	[HarmonyPrefix]
@@ -119,4 +120,8 @@ public class FuelAccess {
 		}
 		throw new InvalidCastException($"Supposed FueledEquipment is neither TZP nor Spraypaint/Weedkiller");
 	}
+	
+	private static Traverse<int> field(VehicleController i) => new Traverse(i).Field<int>("turboBoosts");
+	public static int Get(VehicleController i) => field(i).Value;
+	public static void Set(VehicleController i, int value) => field(i).Value = value;
 }

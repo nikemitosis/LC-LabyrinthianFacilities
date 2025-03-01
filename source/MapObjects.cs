@@ -2,7 +2,10 @@ namespace LabyrinthianFacilities;
 using Patches;
 
 using System;
+using System.Collections;
 using System.Collections.Generic;
+
+using HarmonyLib;
 
 using UnityEngine;
 using Unity.Netcode;
@@ -291,6 +294,19 @@ public class FueledEquipment : BatteryEquipment {
 public class Cruiser : NetworkBehaviour {
 	
 	public Moon Moon {get => this.transform.parent.GetComponent<Moon>();}
+	public VehicleController VehicleController {get => this.GetComponent<VehicleController>();}
+	public bool IsBackDoorOpen {
+		get => this.transform.Find("Meshes/BackDoorContainer/BackDoor/OpenTrigger").GetComponent<BoxCollider>().enabled;
+		set {
+			if (IsBackDoorOpen == value) return;
+			
+			InteractTrigger trigger = this.transform.Find(
+				$"Meshes/BackDoorContainer/BackDoor/{(IsBackDoorOpen ? "OpenTrigger" : "ClosedTrigger")}"
+			).GetComponent<InteractTrigger>();
+			
+			trigger.Interact(StartOfRound.Instance.localPlayerController.transform);
+		}
+	}
 	
 	private static GameObject prefab = null;
 	public static GameObject Prefab {get {
@@ -342,12 +358,30 @@ public class Cruiser : NetworkBehaviour {
 		// Something with reparenting, but why does StopIgnition being disabled matter?
 		// newer.GetComponent<Cruiser>().SetMoon(older.GetComponent<Cruiser>().Moon);
 		
+		VehicleController newVc = newer.GetComponent<VehicleController>();
+		VehicleController oldVc = older.GetComponent<VehicleController>();
+		
+		Cruiser newC = newer.GetComponent<Cruiser>();
+		Cruiser oldC = older.GetComponent<Cruiser>();
+		
+		newVc.carHP = oldVc.carHP;
+		FuelAccess.Set(newVc, FuelAccess.Get(oldVc));
+		if (oldVc.carDestroyed) newC.DestroyCar();
+		newVc.SetIgnition(oldVc.ignitionStarted);
+		if (oldC.IsBackDoorOpen) newC.StartCoroutine(newC.DelayOpenBackDoor());
+		
+		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
 			mo.transform.parent = newer.transform;
 			mo.Restore();
 		}
 		
-		older.GetComponent<Cruiser>().DoneWithOldCruiserServerRpc();
+		oldC.DoneWithOldCruiserServerRpc();
+	}
+	
+	public IEnumerator DelayOpenBackDoor() {
+		yield return new WaitForSeconds(3f);
+		IsBackDoorOpen = true;
 	}
 	
 	private int numFinished = 0;
@@ -364,6 +398,10 @@ public class Cruiser : NetworkBehaviour {
 		// SHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUPSHUTUP
 		this.GetComponent<NetworkObject>().AutoObjectParentSync = false;
 		this.transform.parent = moon.transform;
+	}
+	
+	public void DestroyCar() {
+		new Traverse(this.VehicleController).Method("DestroyCar").GetValue();
 	}
 }
 
@@ -472,6 +510,7 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 	/* Format:
 	 * Identifier: string
 	 * position: Vector3 
+	 * yrot: byte (degrees rounded to nearest multiple of two)
 	*/
 	public override void Serialize(SerializationContext sc, T tgt) {
 		sc.Add(tgt.name.Substring(0,tgt.name.Length - "(Clone)".Length));
@@ -480,6 +519,8 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		sc.Add(tgt.transform.position.x);
 		sc.Add(tgt.transform.position.y);
 		sc.Add(tgt.transform.position.z);
+		
+		sc.Add((byte)(tgt.transform.rotation.eulerAngles.y / 2));
 	}
 	
 	protected override T Deserialize(T rt, DeserializationContext dc) {
@@ -487,8 +528,16 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
 		
+		dc.Consume(sizeof(byte)).CastInto(out byte yRotRounded);
+		
 		if (rt == null) return null;
 		rt.transform.position = new Vector3(x,y,z);
+		float yRot = 2f * yRotRounded;
+		rt.transform.rotation = Quaternion.Euler(
+			rt.Grabbable.itemProperties.restingRotation.x, 
+			yRot, 
+			rt.Grabbable.itemProperties.restingRotation.z
+		);
 		
 		rt.transform.parent = this.parent.transform;
 		
@@ -704,6 +753,9 @@ public class CruiserSerializer : Serializer<Cruiser> {
 	/* Format:
 	 *   float x,y,z
 	 *   Quaternion x,y,z,w
+	 *   int hp
+	 *   int numBoosts
+	 *   bool carIsRunning
 	 *   Scrap[] scrap
 	 *   Equipment[] equipment
 	 *   BatteryEquipment[] batteryEquipment
@@ -718,6 +770,13 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		sc.Add(cruiser.transform.rotation.y);
 		sc.Add(cruiser.transform.rotation.z);
 		sc.Add(cruiser.transform.rotation.w);
+		
+		sc.Add(cruiser.VehicleController.carHP);
+		sc.Add(FuelAccess.Get(cruiser.VehicleController));
+		sc.AddBools<bool>(
+			[cruiser.VehicleController.ignitionStarted, cruiser.IsBackDoorOpen],
+			(t) => t
+		);
 		
 		new MapObjectCollection(cruiser).Serialize(
 			sc,
@@ -745,10 +804,31 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		dc.Consume(4).CastInto(out float w);
 		Quaternion rot = new Quaternion(x,y,z,w);
 		
+		dc.Consume(sizeof(int )).CastInto(out int hp);
+		dc.Consume(sizeof(int )).CastInto(out int boosts);
+		bool running=false, isBackOpen=false;
+		int i=0;
+		foreach (bool b in dc.ConsumeBools(2)) {
+			switch (i) {
+			case 0:
+				running = b;
+			break; case 1:
+				isBackOpen = b;
+			break;
+			}
+			i++;
+		}
+		
 		if (cruiser != null) {
 			cruiser.SetMoon(parent);
 			cruiser.transform.position = pos;
 			cruiser.transform.rotation = rot;
+			
+			cruiser.VehicleController.carHP = hp;
+			cruiser.VehicleController.carDestroyed = (hp == 0);
+			FuelAccess.Set(cruiser.VehicleController, boosts);
+			cruiser.VehicleController.SetIgnition(running);
+			cruiser.IsBackDoorOpen = isBackOpen;
 		}
 		
 		MapObjectCollection.Deserialize(
@@ -798,6 +878,13 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		sc.Add(tgt.transform.rotation.z);
 		sc.Add(tgt.transform.rotation.w);
 		
+		sc.Add(tgt.VehicleController.carHP);
+		sc.Add(FuelAccess.Get(tgt.VehicleController));
+		sc.AddBools<bool>(
+			[tgt.VehicleController.ignitionStarted, tgt.IsBackDoorOpen],
+			(t) => t
+		);
+		
 		new MapObjectCollection(tgt).Serialize(
 			sc,
 			new ScrapNetworkSerializer                             (tgt),
@@ -831,6 +918,28 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		dc.Consume(sizeof(float)).CastInto(out z);
 		dc.Consume(sizeof(float)).CastInto(out float w);
 		tgt.transform.rotation = new Quaternion(x,y,z,w);
+		
+		dc.Consume(sizeof(int)).CastInto(out int hp);
+		tgt.VehicleController.carHP = hp;
+		tgt.VehicleController.carDestroyed = (hp == 0);
+		
+		dc.Consume(sizeof(int)).CastInto(out int boosts);
+		FuelAccess.Set(tgt.VehicleController, boosts);
+		
+		bool running = false, isBackOpen = false;
+		int i=0;
+		foreach (bool b in dc.ConsumeBools(2)) {
+			switch (i) {
+			case 0:
+				running = b;
+			break; case 1:
+				isBackOpen = false;
+			break;
+			}
+			i++;
+		}
+		tgt.VehicleController.SetIgnition(running);
+		tgt.IsBackDoorOpen = isBackOpen;
 		
 		MapObjectCollection.Deserialize(
 			dc,

@@ -64,6 +64,9 @@ public static class SerializationHelper {
 		return rt;
 	}
 	
+	public static void CastInto(this byte[] bytes, out byte b) {
+		b = bytes[0];
+	}
 	public static void CastInto(this byte[] bytes, out string str) {
 		str = System.Text.Encoding.UTF8.GetString(bytes);
 	}
