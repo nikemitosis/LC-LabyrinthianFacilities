@@ -223,7 +223,6 @@ public class RespawnBeesPatch {
 	public static void SetHasSpawnedHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
 		var flag = __instance.GetComponent<DummyFlag>();
 		if (flag == null) return;
-		Plugin.LogFatal("SetHasSpawnedHive");
 		MonoBehaviour.Destroy(flag);
 		
 		___hasSpawnedHive = true;

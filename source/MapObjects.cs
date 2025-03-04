@@ -317,11 +317,6 @@ public class Cruiser : NetworkBehaviour {
 	// (and RestoreClientRpc where it is transfered to the clone cruiser)
 	public bool IsBackDoorOpen = false;
 	
-	
-	public void OnEnable() {
-		StartCoroutine(DelayUpdateBackDoor());
-	}
-	
 	public void Preserve() {
 		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveCruisers) return;
 		
@@ -376,6 +371,11 @@ public class Cruiser : NetworkBehaviour {
 		
 		newC.IsBackDoorOpen = oldC.IsBackDoorOpen;
 		
+		// possible bug where host finishes much sooner than clients
+		// if clients have >5s delay, they will miss the door openning because they won't have 
+		// the door to open yet. Seems exceedingly rare/insignificant, though. 
+		if (IsServer) newC.StartCoroutine(newC.DelayUpdateBackDoor());
+		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
 			mo.transform.parent = newer.transform;
 			mo.Restore();
@@ -385,7 +385,7 @@ public class Cruiser : NetworkBehaviour {
 	}
 	
 	public IEnumerator DelayUpdateBackDoor() {
-		yield return new WaitForSeconds(2f);
+		yield return new WaitForSeconds(5f);
 		UpdateBackDoor();
 	}
 	

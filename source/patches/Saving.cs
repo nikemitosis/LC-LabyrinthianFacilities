@@ -75,12 +75,14 @@ class ModifyFilePatch {
 public class CruiserLoadPatch {
 	
 	private static bool OldState;
+	private static int OldHp;
 	[HarmonyPatch("Start")]
 	[HarmonyPrefix]
 	public static void DontMagnetMoonCruisers(VehicleController __instance) {
 		if (__instance.GetComponent<DummyFlag>() == null) return;
 		
 		OldState = StartOfRound.Instance.inShipPhase;
+		OldHp = __instance.carHP;
 		StartOfRound.Instance.inShipPhase = false;
 	}
 	
@@ -90,6 +92,7 @@ public class CruiserLoadPatch {
 		DummyFlag flag = __instance.GetComponent<DummyFlag>();
 		if (flag == null) return;
 		
+		__instance.carHP = OldHp;
 		Object.Destroy(flag);
 		StartOfRound.Instance.inShipPhase = OldState;
 	}
