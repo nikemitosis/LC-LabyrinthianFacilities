@@ -272,7 +272,7 @@ public class BatteryEquipment : Equipment {
 		set => this.Grabbable.insertedBattery.charge = value;
 	}
 }
-public class GunEquipment : Equipment {
+public class GunEquipment : Scrap {
 	public virtual bool Safety {
 		get => ((ShotgunItem)this.Grabbable).safetyOn;
 		set => ((ShotgunItem)this.Grabbable).safetyOn = value;
@@ -280,6 +280,10 @@ public class GunEquipment : Equipment {
 	public virtual int NumShells {
 		get => ((ShotgunItem)this.Grabbable).shellsLoaded;
 		set => ((ShotgunItem)this.Grabbable).shellsLoaded = value;
+	}
+	
+	public override void Preserve() {
+		if (!Grabbable.isHeldByEnemy) base.Preserve();
 	}
 }
 public class FueledEquipment : BatteryEquipment {
@@ -289,24 +293,12 @@ public class FueledEquipment : BatteryEquipment {
 	}
 }
 
-// Bypassing Netcode's requirement that NetworkObjects must be parented under other NetworkObjects
+// Bypassed Netcode's requirement that cruisers must be parented under other NetworkObjects
 // (I didn't want moons to be server-managed just to take advantage of unity's parenting for cruisers)
 public class Cruiser : NetworkBehaviour {
 	
-	public Moon Moon {get => this.transform.parent.GetComponent<Moon>();}
+	public Moon Moon {get => this.transform.parent?.GetComponent<Moon>();}
 	public VehicleController VehicleController {get => this.GetComponent<VehicleController>();}
-	public bool IsBackDoorOpen {
-		get => this.transform.Find("Meshes/BackDoorContainer/BackDoor/OpenTrigger").GetComponent<BoxCollider>().enabled;
-		set {
-			if (IsBackDoorOpen == value) return;
-			
-			InteractTrigger trigger = this.transform.Find(
-				$"Meshes/BackDoorContainer/BackDoor/{(IsBackDoorOpen ? "OpenTrigger" : "ClosedTrigger")}"
-			).GetComponent<InteractTrigger>();
-			
-			trigger.Interact(StartOfRound.Instance.localPlayerController.transform);
-		}
-	}
 	
 	private static GameObject prefab = null;
 	public static GameObject Prefab {get {
@@ -321,8 +313,21 @@ public class Cruiser : NetworkBehaviour {
 		return Cruiser.prefab;
 	}}
 	
+	// Represents the *desired* state of the back door, only updated on Preserve 
+	// (and RestoreClientRpc where it is transfered to the clone cruiser)
+	public bool IsBackDoorOpen = false;
+	
+	
+	public void OnEnable() {
+		StartCoroutine(DelayUpdateBackDoor());
+	}
+	
 	public void Preserve() {
 		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveCruisers) return;
+		
+		IsBackDoorOpen = this.transform.Find(
+			"Meshes/BackDoorContainer/BackDoor/OpenTrigger"
+		).GetComponent<BoxCollider>().enabled;
 		
 		var vc = this.GetComponent<VehicleController>();
 		if (vc.magnetedToShip  ||  vc.carDestroyed && vc.GetComponentsInChildren<MapObject>().Length == 0) {
@@ -368,8 +373,8 @@ public class Cruiser : NetworkBehaviour {
 		FuelAccess.Set(newVc, FuelAccess.Get(oldVc));
 		if (oldVc.carDestroyed) newC.DestroyCar();
 		newVc.SetIgnition(oldVc.ignitionStarted);
-		if (oldC.IsBackDoorOpen) newC.StartCoroutine(newC.DelayOpenBackDoor());
 		
+		newC.IsBackDoorOpen = oldC.IsBackDoorOpen;
 		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
 			mo.transform.parent = newer.transform;
@@ -379,9 +384,23 @@ public class Cruiser : NetworkBehaviour {
 		oldC.DoneWithOldCruiserServerRpc();
 	}
 	
-	public IEnumerator DelayOpenBackDoor() {
-		yield return new WaitForSeconds(3f);
-		IsBackDoorOpen = true;
+	public IEnumerator DelayUpdateBackDoor() {
+		yield return new WaitForSeconds(2f);
+		UpdateBackDoor();
+	}
+	
+	public void UpdateBackDoor() {
+		if (
+			IsBackDoorOpen == this.transform.Find(
+				"Meshes/BackDoorContainer/BackDoor/OpenTrigger"
+			).GetComponent<BoxCollider>().enabled
+		) return;
+		
+		this.transform.Find(
+			$"Meshes/BackDoorContainer/BackDoor/{(IsBackDoorOpen ? "ClosedTrigger" : "OpenTrigger")}"
+		).GetComponent<InteractTrigger>().Interact(
+			StartOfRound.Instance.localPlayerController.transform
+		);
 	}
 	
 	private int numFinished = 0;
@@ -560,8 +579,8 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 	}
 }
 
-public class ScrapSerializer : MapObjectSerializer<Scrap> {
-	public override Scrap GetPrefab(string id) => Scrap.GetPrefab(id);
+public class ScrapSerializer<T> : MapObjectSerializer<T> where T : Scrap {
+	public override T GetPrefab(string id) => (T)Scrap.GetPrefab(id);
 	
 	public ScrapSerializer(Moon     p) : base(p) {}
 	public ScrapSerializer(DGameMap p) : base(p) {}
@@ -571,13 +590,13 @@ public class ScrapSerializer : MapObjectSerializer<Scrap> {
 	 *     base
 	 *     ScrapValue: int
 	*/
-	public override void Serialize(SerializationContext sc, Scrap scrap) {
+	public override void Serialize(SerializationContext sc, T scrap) {
 		base.Serialize(sc,scrap);
 		sc.Add(scrap.Grabbable.scrapValue);
 	}
 	
-	protected override Scrap Deserialize(
-		Scrap rt, DeserializationContext dc
+	protected override T Deserialize(
+		T rt, DeserializationContext dc
 	) {
 		base.Deserialize(rt,dc);
 		
@@ -617,7 +636,7 @@ public class BatteryEquipmentSerializer<T> : EquipmentSerializer<T> where T : Ba
 	}
 }
 
-public class GunEquipmentSerializer<T> : EquipmentSerializer<T> where T : GunEquipment {
+public class GunEquipmentSerializer<T> : ScrapSerializer<T> where T : GunEquipment {
 	
 	public GunEquipmentSerializer(Moon     p) : base(p) {}
 	public GunEquipmentSerializer(DGameMap p) : base(p) {}
@@ -682,19 +701,19 @@ public class MapObjectNetworkSerializer<T> : Serializer<T> where T : MapObject {
 	}
 }
 
-public class ScrapNetworkSerializer : MapObjectNetworkSerializer<Scrap> {
+public class ScrapNetworkSerializer<T> : MapObjectNetworkSerializer<T> where T : Scrap {
 	
 	public ScrapNetworkSerializer(Moon     p) : base(p) {}
 	public ScrapNetworkSerializer(DGameMap p) : base(p) {}
 	public ScrapNetworkSerializer(Cruiser  p) : base(p) {}
 	
-	public override void Serialize(SerializationContext sc, Scrap s) {
+	public override void Serialize(SerializationContext sc, T s) {
 		base.Serialize(sc,s);
 		sc.Add(s.Grabbable.scrapValue);
 	}
 	
-	protected override Scrap Deserialize(
-		Scrap s, DeserializationContext dc
+	protected override T Deserialize(
+		T s, DeserializationContext dc
 	) {
 		base.Deserialize(s,dc);
 		
@@ -780,7 +799,7 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		
 		new MapObjectCollection(cruiser).Serialize(
 			sc,
-			new ScrapSerializer           /* Scrap */       (cruiser),
+			new ScrapSerializer           <Scrap>           (cruiser),
 			new EquipmentSerializer       <Equipment>       (cruiser),
 			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
 			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
@@ -833,7 +852,7 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapSerializer           /* <Scrap> */     (cruiser),
+			new ScrapSerializer           <Scrap>           (cruiser),
 			new EquipmentSerializer       <Equipment>       (cruiser),
 			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
 			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
@@ -887,7 +906,7 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		
 		new MapObjectCollection(tgt).Serialize(
 			sc,
-			new ScrapNetworkSerializer                             (tgt),
+			new ScrapNetworkSerializer           <Scrap>           (tgt),
 			new MapObjectNetworkSerializer       <Equipment>       (tgt),
 			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(tgt),
 			new GunEquipmentNetworkSerializer    <GunEquipment>    (tgt),
@@ -943,7 +962,7 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 		
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapNetworkSerializer           /* <Scrap> */     (tgt),
+			new ScrapNetworkSerializer           <Scrap>           (tgt),
 			new MapObjectNetworkSerializer       <Equipment>       (tgt),
 			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(tgt),
 			new GunEquipmentNetworkSerializer    <GunEquipment>    (tgt),

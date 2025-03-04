@@ -205,6 +205,8 @@ public sealed class Plugin : BaseUnityPlugin {
 			if (grabbable.itemProperties.isScrap) {
 				if (grabbable.name == "RedLocustHive") {
 					grabbable.gameObject.AddComponent<Beehive>();
+				} else if (grabbable is ShotgunItem) {
+					grabbable.gameObject.AddComponent<GunEquipment>();
 				} else {
 					grabbable.gameObject.AddComponent<Scrap>();
 				}
@@ -214,8 +216,6 @@ public sealed class Plugin : BaseUnityPlugin {
 			) {
 				if (grabbable.itemProperties.requiresBattery) {
 					grabbable.gameObject.AddComponent<BatteryEquipment>();
-				} else if (grabbable is ShotgunItem) {
-					grabbable.gameObject.AddComponent<GunEquipment>();
 				} else if (grabbable is SprayPaintItem || grabbable is TetraChemicalItem) {
 					grabbable.gameObject.AddComponent<FueledEquipment>();
 				} else {
@@ -778,7 +778,7 @@ public class MoonSerializer : Serializer<Moon> {
 		}
 		new MapObjectCollection(mapObjects).Serialize(
 			sc,
-			new ScrapSerializer           /* <Scrap> */     (moon),
+			new ScrapSerializer           <Scrap           >(moon),
 			new EquipmentSerializer       <Equipment       >(moon),
 			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
 			new GunEquipmentSerializer    <GunEquipment    >(moon),
@@ -806,7 +806,7 @@ public class MoonSerializer : Serializer<Moon> {
 		
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapSerializer           /* <Scrap> */     (moon),
+			new ScrapSerializer           <Scrap>           (moon),
 			new EquipmentSerializer       <Equipment>       (moon),
 			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
 			new GunEquipmentSerializer    <GunEquipment>    (moon),
@@ -871,7 +871,7 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		}
 		new MapObjectCollection(mapObjects).Serialize(
 			sc,
-			new ScrapNetworkSerializer                      (moon),
+			new ScrapNetworkSerializer    <Scrap>           (moon),
 			new MapObjectNetworkSerializer<Equipment>       (moon),
 			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
 			new MapObjectNetworkSerializer<GunEquipment>    (moon),
@@ -914,7 +914,7 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		// MapObjects
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapNetworkSerializer                      (moon),
+			new ScrapNetworkSerializer    <Scrap>           (moon),
 			new MapObjectNetworkSerializer<Equipment>       (moon),
 			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
 			new MapObjectNetworkSerializer<GunEquipment>    (moon),

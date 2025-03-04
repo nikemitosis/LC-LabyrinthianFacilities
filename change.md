@@ -7,11 +7,11 @@ It also adds space for Hazards to DGameMap, making it two bytes bigger than prev
 ## New Features
  - #15 Items now have metadata saved about them (battery level, shotgun safety, number of shells, etc.)
  - #26 Items now have their y-rotation saved, and their x-rotation and z-rotation is initialized to a more appropriate default value (the resting rotation defined by vanilla LC)
- - #35 Cruiser now has its important attributes saved between days (hp, boosts, car is running, back door open)
-   - !!Back door currently doesn't load from file properly. This is because the back door state is initialized while the cruiser is inactive. Will be fixed before this update is released. 
+ - #35 Cruiser now has its important attributes saved between days (hp, boosts, car is running, back door state)
 
-## Fixes
+## Bug Fixes
  - Removed spurious error messages about syncing save history files. 
+ - Fixed nutcracker shotguns being preserved if you didn't kill the nutcracker. 
 
 ## Technical
  - #36 Added space for Hazard saving in `DGameMap` serialization

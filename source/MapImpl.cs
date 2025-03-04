@@ -605,7 +605,7 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 		
 		new MapObjectCollection(tgt).Serialize(
 			sc,
-			new ScrapSerializer           /* <Scrap> */     (tgt),
+			new ScrapSerializer           <Scrap>           (tgt),
 			new EquipmentSerializer       <Equipment>       (tgt),
 			new BatteryEquipmentSerializer<BatteryEquipment>(tgt),
 			new GunEquipmentSerializer    <GunEquipment>    (tgt),
@@ -624,7 +624,7 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 		
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapSerializer           /* <Scrap> */     (rt),
+			new ScrapSerializer           <Scrap>           (rt),
 			new EquipmentSerializer       <Equipment>       (rt),
 			new BatteryEquipmentSerializer<BatteryEquipment>(rt),
 			new GunEquipmentSerializer    <GunEquipment>    (rt),
@@ -755,7 +755,7 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		
 		new MapObjectCollection(m).Serialize(
 			sc,
-			new ScrapNetworkSerializer           /*<Scrap>*/       (m),
+			new ScrapNetworkSerializer           <Scrap>           (m),
 			new MapObjectNetworkSerializer       <Equipment>       (m),
 			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(m),
 			new GunEquipmentNetworkSerializer    <GunEquipment>    (m),
@@ -768,7 +768,7 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc) {
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapNetworkSerializer           /*<Scrap>*/       (map),
+			new ScrapNetworkSerializer           <Scrap>           (map),
 			new MapObjectNetworkSerializer       <Equipment>       (map),
 			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(map),
 			new GunEquipmentNetworkSerializer    <GunEquipment>    (map),
