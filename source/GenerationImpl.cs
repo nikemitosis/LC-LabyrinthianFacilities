@@ -207,12 +207,6 @@ public class Archetype {
 
 public class DungeonFlowConverter : ITileGenerator {
 	
-	public const float LOWERBOUND_MULTIPLIER = 3.5f;
-	public const float UPPERBOUND_MULTIPLIER = 8.0f;
-	
-	private int seed;
-	private Random rng;
-	
 	protected DunGen.Graph.DungeonFlow flow;
 	
 	protected DTile StartRoom;
@@ -226,10 +220,15 @@ public class DungeonFlowConverter : ITileGenerator {
 	public int TileCountUpperBound {get; protected set;}
 	public int TileCountAverage {get => (TileCountLowerBound + TileCountUpperBound)/2;}
 	
+	public int PlacementLowerBound {get => (int)(Config.Singleton.LowerIterationMultiplier*TileCountLowerBound);}
+	public int PlacementUpperBound {get => (int)(Config.Singleton.UpperIterationMultiplier*TileCountLowerBound);}
+	
 	// if a tile fails to place within MAX_ATTEMPTS, a new tile is chosen
 	private const int MAX_ATTEMPTS=10;
 	private int iterationsSinceLastSuccess = 0;
 	
+	private int seed;
+	private Random rng;
 	public int Seed {
 		get => this.seed;
 		set {
@@ -272,8 +271,8 @@ public class DungeonFlowConverter : ITileGenerator {
 			)
 		);
 		
-		this.TileCountLowerBound = (int)(baseTileCount * LOWERBOUND_MULTIPLIER);
-		this.TileCountUpperBound = (int)(baseTileCount * UPPERBOUND_MULTIPLIER);
+		this.TileCountLowerBound = (int)(baseTileCount * Config.Singleton.MinimumTileMultiplier);
+		this.TileCountUpperBound = (int)(baseTileCount * Config.Singleton.MaximumTileMultiplier);
 		
 		float summedLength = 0.0f;
 		
@@ -348,9 +347,9 @@ public class DungeonFlowConverter : ITileGenerator {
 			yield return null;
 			yield break;
 		}
-		#if VERBOSE_GENERATION
-			Plugin.LogDebug($"Using '{StartRoom.name}' as start room");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug(
+			$"Using '{StartRoom.name}' as start room"
+		);
 		
 		yield return new PlacementInfo(StartRoom);
 		string startname = "";
@@ -390,16 +389,24 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Removing tiles...");
 		
 		int tileCount = map.TileCount;
-		int upperBound = Math.Min(tileCount, TileCountUpperBound - TileCountLowerBound);
+		
+		// We want at most TileCountUpperBoundTiles, but we need room for TileCountLowerBound more tiles, 
+		// because that's the minimum number of tiles to add
+		// We can't get more tiles than we already have by removing them, though. 
+		int upperBound = Math.Min(TileCountUpperBound - TileCountLowerBound, tileCount);
+		
+		// We want to keep at least 80% of tiles to make sure we don't nuke too much of the map
+		// but we don't want to dip below the minimum number of tiles
 		int lowerBound = Math.Max(4*tileCount/5, TileCountLowerBound);
+		
 		if (lowerBound > upperBound) lowerBound = upperBound;
 		
 		int targetCount = Rng.Next(lowerBound,upperBound+1);
 		int numTilesToDelete = tileCount - targetCount;
 		
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Removing {numTilesToDelete} tiles...");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) {
+			Plugin.LogDebug($"Removing {numTilesToDelete} tiles...");
+		}
 		
 		while (numTilesToDelete > 0) {
 			Tile[] tiles = map.GetComponentsInChildren<Tile>();
@@ -410,9 +417,7 @@ public class DungeonFlowConverter : ITileGenerator {
 				selected = tiles[Rng.Next(tiles.Length)];
 				numTilesUnderSelection = selected.GetComponentsInChildren<DTile>().Length;
 			} while (numTilesUnderSelection > numTilesToDelete);
-			#if VERBOSE_GENERATION
-			Plugin.LogDebug($"Removing {selected.name}");
-			#endif
+			if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Removing {selected.name}");
 			yield return new RemovalInfo(selected);
 			numTilesToDelete -= numTilesUnderSelection;
 		}
@@ -430,34 +435,32 @@ public class DungeonFlowConverter : ITileGenerator {
 				parent: this, map: map, root: root, archetype: archetype, tilesPlaced: tilesPlaced
 			)
 		) {
-			#if VERBOSE_GENERATION
 			int numAttempts = 0;
-			#endif
 			while (progress != length) { // root attempts
 				PlacementInfo attempt = arp.YieldAttempt();
 				if (attempt != null) yield return attempt;
 				if (attempt != null && arp.iterationsSinceLastSuccess == 0) {
 					progress++;
-					#if VERBOSE_GENERATION
-					Plugin.LogDebug(
-						$"+ ({numAttempts}) {attempt.NewTile.name} | {attempt.AttachmentPoint.Tile.name}"
-					);
-					#endif
+					if (Config.Singleton.EnableVerboseGeneration) {
+						Plugin.LogDebug(
+							$"+ ({numAttempts}) {attempt.NewTile.name} | {attempt.AttachmentPoint.Tile.name}"
+						);
+					}
 				} else {
 					if (attempt == null || arp.iterationsSinceLastSuccess >= 30) {
 						if (progress < 0.7f*length) {
-							#if VERBOSE_GENERATION
-							Plugin.LogDebug(
-								$"Root failure: Generated {progress}/{length} tiles from root {root.Tile}"
-							);
-							if (attempt == null) {
-								Plugin.LogDebug($"Reason: Exhausted all options");
-							} else {
+							if (Config.Singleton.EnableVerboseGeneration) {
 								Plugin.LogDebug(
-									$"Reason: Exceeded 30 attempts between placements"
+									$"Root failure: Generated {progress}/{length} tiles from root {root.Tile}"
 								);
+								if (attempt == null) {
+									Plugin.LogDebug($"Reason: Exhausted all options");
+								} else {
+									Plugin.LogDebug(
+										$"Reason: Exceeded 30 attempts between placements"
+									);
+								}
 							}
-							#endif
 							if (progress != 0) {
 								progress = 0;
 								// allow props to initialize so they may be properly disposed
@@ -469,14 +472,12 @@ public class DungeonFlowConverter : ITileGenerator {
 						break;
 					}
 				}
-				#if VERBOSE_GENERATION
-				numAttempts = arp.iterationsSinceLastSuccess;
-				#endif
+				if (Config.Singleton.EnableVerboseGeneration) numAttempts = arp.iterationsSinceLastSuccess;
 			}
 		}
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Generated {progress}/{length} tiles from root {root.Tile}");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) {
+			Plugin.LogDebug($"Generated {progress}/{length} tiles from root {root.Tile}");
+		}
 		reaction(progress);
 		yield break;
 	}
@@ -487,14 +488,16 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Placing tiles...");
 		
 		int mapTileCount = map.TileCount;
-		int lowerBound = mapTileCount > TileCountLowerBound ? mapTileCount : TileCountLowerBound;
+		
+		// we need at least TileCountLowerBound tiles, but we might already have enough
+		int lowerBound = Math.Max(mapTileCount, TileCountLowerBound);
 		int target = Rng.Next(lowerBound, TileCountUpperBound+1);
 		int tile_demand = target - mapTileCount;
-		if (tile_demand > TileCountLowerBound) tile_demand = TileCountLowerBound;
 		
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Queueing {tile_demand} tiles...");
-		#endif
+		tile_demand = Math.Max(tile_demand,PlacementLowerBound);
+		tile_demand = Math.Min(tile_demand,PlacementUpperBound);
+		
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Queueing {tile_demand} tiles...");
 		
 		int tile_demand_theory = tile_demand;
 		
@@ -528,13 +531,13 @@ public class DungeonFlowConverter : ITileGenerator {
 			}
 		}
 		
-		#if VERBOSE_GENERATION
-		string msg = $"Archetype sizes: ({archetypeSizes.Count}) - ";
-		foreach ((Archetype a,int len) in archetypeSizes) {
-			msg += $"{len}, "; // yes theres an extra comma. It's special and his name is jerry
+		if (Config.Singleton.EnableVerboseGeneration) {
+			string msg = $"Archetype sizes: ({archetypeSizes.Count}) - ";
+			foreach ((Archetype a,int len) in archetypeSizes) {
+				msg += $"{len}, "; // yes theres an extra comma. It's special and his name is jerry
+			}
+			Plugin.LogDebug(msg.Substring(0,msg.Length-2));
 		}
-		Plugin.LogDebug(msg.Substring(0,msg.Length-2));
-		#endif
 		
 		foreach ((Archetype archetype, int length) in archetypeSizes) {
 			
@@ -609,11 +612,11 @@ public class DungeonFlowConverter : ITileGenerator {
 		Plugin.LogInfo($"Queueing making some loops...");
 		foreach (Connection con in map.DoorwayManager.GetPotentialConnections((Connection c) => 1.0f)) {
 			if (Rng.NextDouble() < DoorwayConnectionChance) {
-				#if VERBOSE_GENERATION
-				Plugin.LogDebug(
-					$"C {con.d1.Tile.name}.{con.d1.name} | {con.d2.Tile.name}.{con.d2.name}"
-				);
-				#endif
+				if (Config.Singleton.EnableVerboseGeneration) {
+					Plugin.LogDebug(
+						$"C {con.d1.Tile.name}.{con.d1.name} | {con.d2.Tile.name}.{con.d2.name}"
+					);
+				}
 				yield return new ConnectAction(con.d1, con.d2);
 			}
 		}
@@ -629,11 +632,9 @@ public class DungeonFlowConverter : ITileGenerator {
 				&& d2.Tile.transform.parent != d1.transform 
 				&& Rng.NextDouble() < DoorwayDisconnectChance
 			) {
-				#if VERBOSE_GENERATION
-				Plugin.LogDebug(
+				if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug(
 					$"D {d1.Tile.name}.{d1.name} | {d2.Tile.name}.{d2.name}"
 				);
-				#endif
 				yield return new DisconnectAction(d1,d2);
 			}
 		}
@@ -653,9 +654,7 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	private IEnumerable<PropAction> HandleDoorProps(DGameMap map) {
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Handling door props...");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Handling door props...");
 		
 		var timer = new Stopwatch();
 		timer.Start();
@@ -682,30 +681,22 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	private IEnumerable<PropAction> HandleMapProps(DGameMap map) {
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Handling global props...");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Handling global props...");
 		
 		Stopwatch timer = new();
 		timer.Start();
 		
 		foreach (PropSet propset in map.GlobalPropSets) {
-			#if VERBOSE_GENERATION
-			Plugin.LogDebug(
+			if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug(
 				$"Handling propset w/ {(propset.Count > 0 ? propset[0.0f].name : "nothing in it")} "
 				+$"({propset.Count} props)"
 			);
-			#endif
 			foreach (var action in HandlePropSetPos(propset)) {
-				#if VERBOSE_GENERATION
-				Plugin.LogDebug($"+{action.Prop.name}");
-				#endif
+				if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"+{action.Prop.name}");
 				yield return action;
 			}
 			foreach (var action in HandlePropSetNeg(propset,true)) {
-				#if VERBOSE_GENERATION
-				Plugin.LogDebug($"-{action.Prop.name}");
-				#endif
+				if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"-{action.Prop.name}");
 				yield return action;
 			}
 		}
@@ -715,9 +706,7 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	private IEnumerable<PropAction> HandleTileProps(DGameMap map) {
-		#if VERBOSE_GENERATION
-		Plugin.LogDebug($"Handling local props...");
-		#endif
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Handling local props...");
 		
 		var timer = new Stopwatch();
 		timer.Start();
@@ -725,17 +714,14 @@ public class DungeonFlowConverter : ITileGenerator {
 		foreach (DTile tile in map.GetComponentsInChildren<DTile>()) {
 			foreach (PropSet propset in tile.LocalPropSets) {
 				foreach (var action in HandlePropSetPos(propset)) {
-					#if VERBOSE_GENERATION
-					Plugin.LogDebug($"+{action.Prop.name}");
-					#endif
+					if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"+{action.Prop.name}");
+					
 					yield return action;
 				}
 			}
 			foreach (PropSet propset in tile.LocalPropSets) {
 				foreach (var action in HandlePropSetNeg(propset)) {
-					#if VERBOSE_GENERATION
-					Plugin.LogDebug($"-{action.Prop.name}");
-					#endif
+					if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"-{action.Prop.name}");
 					yield return action;
 				}
 			}

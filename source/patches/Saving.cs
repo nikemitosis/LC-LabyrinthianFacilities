@@ -98,6 +98,23 @@ public class CruiserLoadPatch {
 	}
 }
 
+[HarmonyPatch(typeof(GrabbableObject))]
+public class DontFallOnLoad {
+	[HarmonyPatch("Start")]
+	[HarmonyPostfix]
+	public static void CancelFall(GrabbableObject __instance) {
+		DummyFlag dummy = __instance.GetComponent<DummyFlag>();
+		if (dummy != null) {
+			Object.Destroy(dummy);
+			__instance.fallTime = 1f;
+			__instance.hasHitGround = true;
+			__instance.reachedFloorTarget = true;
+			__instance.targetFloorPosition  = __instance.transform.localPosition;
+			__instance.startFallingPosition = __instance.transform.localPosition;
+		}
+	}
+}
+
 public class FuelAccess {
 	private static Traverse<float> field(TetraChemicalItem i) => new Traverse(i).Field<float>("fuel");
 	public static float Get(TetraChemicalItem item) => field(item).Value;

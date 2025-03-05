@@ -40,7 +40,10 @@ class GenerateLevel {
 			#endif
 			
 			__instance.Seed = seed;
-			// if (!Config.Singleton.UseCustomGeneration) return true;
+			if (!Config.Singleton.UseCustomGeneration) {
+				MapHandler.Instance.ChangeActiveMoon(StartOfRound.Instance.currentLevel);
+				return true;
+			}
 			
 			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
@@ -229,23 +232,6 @@ public class RespawnBeesPatch {
 	}
 }
 
-[HarmonyPatch(typeof(GrabbableObject))]
-public class DontFallOnLoad {
-	[HarmonyPatch("Start")]
-	[HarmonyPostfix]
-	public static void CancelFall(GrabbableObject __instance) {
-		DummyFlag dummy = __instance.GetComponent<DummyFlag>();
-		if (dummy != null) {
-			Object.Destroy(dummy);
-			__instance.fallTime = 1f;
-			__instance.hasHitGround = true;
-			__instance.reachedFloorTarget = true;
-			__instance.targetFloorPosition  = __instance.transform.localPosition;
-			__instance.startFallingPosition = __instance.transform.localPosition;
-		}
-	}
-}
-
 [HarmonyPatch(typeof(RoundManager))]
 public class DontDestroyRandomMapObjects {
 	// Pre-writing note: god help me
@@ -329,5 +315,18 @@ public class DontDestroyRandomMapObjects {
 			if (buffer.Count == 0) yield return instr;
 		}
 		if (state != 8) throw new Exception($"Transpiler failure - only made it to state {state}/8");
+	}
+}
+
+[HarmonyPatch(typeof(HUDManager))]
+public class EasterEggDetection {
+	public static string cruiserMagicWord = "bouncy cruisers";
+	
+	[HarmonyPatch("AddTextToChatOnServer")]
+	[HarmonyPostfix]
+	public static void TriggerEasterEgg(string chatMessage) {
+		if (Config.Singleton.BouncyCruisers && chatMessage == cruiserMagicWord) {
+			MapHandler.Instance.StartCoroutine(MapHandler.Instance.EnableBouncyCruisers());
+		}
 	}
 }

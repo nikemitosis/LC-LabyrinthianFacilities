@@ -373,7 +373,8 @@ public class Cruiser : NetworkBehaviour {
 		
 		// possible bug where host finishes much sooner than clients
 		// if clients have >5s delay, they will miss the door openning because they won't have 
-		// the door to open yet. Seems exceedingly rare/insignificant, though. 
+		// the door to open yet. Seems exceedingly rare/insignificant though, 
+		// since the clients should be able to open the door themselves. 
 		if (IsServer) newC.StartCoroutine(newC.DelayUpdateBackDoor());
 		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {

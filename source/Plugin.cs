@@ -15,8 +15,9 @@ using BepInEx.Configuration;
 using BepInEx.Logging;
 using HarmonyLib;
 
-using UnityEngine;
 using Unity.Netcode;
+using UnityEngine;
+using UnityEngine.SceneManagement;
 
 using DunGen.Graph;
 
@@ -24,28 +25,24 @@ using DunGen.Graph;
 using Random = System.Random;
 using Object = UnityEngine.Object;
 
-using UnityEngine.SceneManagement;
+// BepInEx + Netcode ambiguity
+using LogLevel = BepInEx.Logging.LogLevel;
 
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.4.3";
-	
-	public static Plugin Singleton {get; private set;}
+	public const string VERSION = "0.5.0";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
+	private new Config Config {get => LabyrinthianFacilities.Config.Singleton;}
 	
 	private static bool initializedAssets = false;
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
 	private static uint PROMOTE_LOG = 0;
 	public static bool TreatWarningsAsErrors = true;
-	
-	// if other modders want to make this thing shut the fuck up, set this higher
-	// (0=Debug, 1=Info, 2=Message, 3=Warning, 4=Error, 5=Fatal)
-	public static uint MIN_LOG = 0;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
@@ -65,11 +62,10 @@ public sealed class Plugin : BaseUnityPlugin {
 	}
 	
 	private void Awake() {
-		if (Singleton != null) throw new InvalidOperationException("Singleton violation");
-		Singleton = this;
+		LabyrinthianFacilities.Config.ConfigFile = base.Config;
+		var cfg = LabyrinthianFacilities.Config.Singleton;
 		Logger = base.Logger;
 		
-		var cfg = LabyrinthianFacilities.Config.Singleton;
 		if (!cfg.GlobalEnable) {
 			LogInfo("{NAME} is disabled by its config; Skipping initialization");
 			return;
@@ -98,48 +94,43 @@ public sealed class Plugin : BaseUnityPlugin {
 	}
 	
 	public static void LogDebug  (string message) {
-		if (MIN_LOG > 0) return;
 		if (PROMOTE_LOG > 0) {
 			LogInfo(message);
 			return;
 		}
-		Logger.LogDebug(message);
+		if ((Config.Singleton.LogLevels & LogLevel.Debug) != 0) Logger.LogDebug(message);
 	}
 	public static void LogInfo   (string message) {
-		if (MIN_LOG > 1) return;
 		if (PROMOTE_LOG > 1) {
 			LogMessage(message);
 			return;
 		}
-		Logger.LogInfo(message);
+		if ((Config.Singleton.LogLevels & LogLevel.Info) != 0) Logger.LogInfo(message);
 	}
 	public static void LogMessage(string message) {
-		if (MIN_LOG > 2) return;
 		if (PROMOTE_LOG > 2) {
 			LogWarning(message);
 			return;
 		}
-		Logger.LogMessage(message);
+		if ((Config.Singleton.LogLevels & LogLevel.Message) != 0) Logger.LogMessage(message);
 	}
 	public static void LogWarning(string message) {
-		if (MIN_LOG > 3) return;
 		if (PROMOTE_LOG > 3 || TreatWarningsAsErrors) {
 			LogError(message);
 			return;
 		}
-		Logger.LogWarning(message);
+		if ((Config.Singleton.LogLevels & LogLevel.Warning) != 0) Logger.LogWarning(message);
 	}
 	public static void LogError  (string message) {
-		if (MIN_LOG > 4) return;
 		if (PROMOTE_LOG > 4) {
 			LogFatal(message);
 			return;
 		}
-		Logger.LogError(message);
+		if ((Config.Singleton.LogLevels & LogLevel.Error) != 0) Logger.LogError(message);
 	}
 	public static void LogFatal  (string message) {
-		if (MIN_LOG > 5 || PROMOTE_LOG > 5) return;
-		Logger.LogFatal(message);
+		if (PROMOTE_LOG > 5) return;
+		if ((Config.Singleton.LogLevels & LogLevel.Fatal) != 0) Logger.LogFatal(message);
 	}
 	
 	public static void InitializeAssets() {
@@ -235,6 +226,7 @@ public sealed class Plugin : BaseUnityPlugin {
 			}
 		}
 	}
+	
 }
 
 public class MapHandler : NetworkBehaviour {
@@ -326,16 +318,18 @@ public class MapHandler : NetworkBehaviour {
 		this.ActiveMoon = null;
 	}
 	
+	public void ChangeActiveMoon(SelectableLevel level) {
+		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
+		this.ActiveMoon = GetMoon(level);
+		this.ActiveMoon.gameObject.SetActive(true);
+	}
+	
 	public IEnumerator Generate(
 		SelectableLevel level, 
 		DungeonFlowConverter tilegen, 
 		Action<GameMap> onComplete=null
 	) {
-		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
-		
-		Moon moon = GetMoon(level);
-		this.ActiveMoon = moon;
-		this.ActiveMoon.gameObject.SetActive(true);
+		ChangeActiveMoon(level);
 		
 		yield return this.ActiveMoon.Generate(tilegen, onComplete);
 		
@@ -476,6 +470,19 @@ public class MapHandler : NetworkBehaviour {
 			fs.Write($"Mod Seed: {modSeed}\n\n".GetBytes());
 		}
 	}
+	
+	public static Vector3 OFFSET = 3*Vector3.down;
+	public IEnumerator EnableBouncyCruisers() {
+		Cruiser[] cruisers = Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None);
+		foreach (Cruiser c in cruisers) {
+			c.gameObject.SetActive(false);
+			c.transform.position += OFFSET;
+		}
+		yield return new WaitForSeconds(1f);
+		foreach (Cruiser c in cruisers) {
+			c.gameObject.SetActive(true);
+		}
+	}
 }
 
 public class Moon : MonoBehaviour {
@@ -553,6 +560,9 @@ public class Moon : MonoBehaviour {
 	}
 	
 	public void PreserveEarlyObjects() {
+		if (!Config.Singleton.SaveMaps && Config.Singleton.UseCustomGeneration) {
+			GameObject.Destroy(ActiveMap.RootTile);
+		}
 		if (Config.Singleton.SaveHives) {
 			foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
 				bee.hive.GetComponent<Beehive>().SaveBees(bee);
