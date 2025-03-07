@@ -1,11 +1,19 @@
 namespace LabyrinthianFacilities;
 
+using Serialization;
+using Util;
+
 using System;
+using System.Collections.Generic;
 
 using BepInEx.Configuration;
 using BepInEx.Logging;
 
-public sealed class Config {
+using Unity.Netcode;
+
+using LogLevel = BepInEx.Logging.LogLevel;
+
+public class Config {
 	internal static ConfigFile ConfigFile;
 	private static Config singleton = null;
 	public static Config Singleton {get => singleton ??= new Config();}
@@ -54,48 +62,48 @@ public sealed class Config {
 	private ConfigEntry<bool> m_EnableHistory;
 	
 	// Features.SetSeed
-	private ConfigEntry<bool>  m_UseSetSeed;
-	private ConfigEntry<int >  m_Seed;
-	private ConfigEntry<bool>  m_IncrementSetSeed;
+	private ConfigEntry<bool> m_UseSetSeed;
+	private ConfigEntry<int > m_Seed;
+	private ConfigEntry<bool> m_IncrementSetSeed;
 	
-	public bool GlobalEnable                 {get => m_GlobalEnable.Value;}
+	public bool GlobalEnable                 {get; set;}
 	
-	public bool EnableNoncollectionPenalty   {get => m_EnableNoncollectionPenalty.Value;}
-	public bool ExcludeCruiserScrap          {get => m_ExcludeCruiserScrap.Value;}
-	public bool ExcludeSurfaceScrap          {get => m_ExcludeSurfaceScrap.Value;}
-	public bool ExcludeHive                  {get => m_ExcludeHive.Value;}
+	public bool EnableNoncollectionPenalty   {get; set;}
+	public bool ExcludeCruiserScrap          {get; set;}
+	public bool ExcludeSurfaceScrap          {get; set;}
+	public bool ExcludeHive                  {get; set;}
 	
-	public bool SaveMapObjects               {get => m_SaveMapObjects.Value;}
-	public bool SaveEquipment                {get => m_SaveEquipment.Value;}
-	public bool SaveScrap                    {get => m_SaveScrap.Value;}
-	public bool SaveHives                    {get => m_SaveHives.Value;}
-	public bool SaveCruisers                 {get => m_SaveCruisers.Value;}
+	public bool SaveMapObjects               {get; set;}
+	public bool SaveEquipment                {get; set;}
+	public bool SaveScrap                    {get; set;}
+	public bool SaveHives                    {get; set;}
+	public bool SaveCruisers                 {get; set;}
 	
-	public bool SaveHazards                  {get => m_SaveHazards.Value;}
-	public bool SaveTurrets                  {get => m_SaveTurrets.Value;}
-	public bool SaveLandmines                {get => m_SaveLandmines.Value;}
-	public bool SaveSpikeTraps               {get => m_SaveSpikeTraps.Value;}
+	public bool SaveHazards                  {get; set;}
+	public bool SaveTurrets                  {get; set;}
+	public bool SaveLandmines                {get; set;}
+	public bool SaveSpikeTraps               {get; set;}
 	
-	public bool UseCustomGeneration          {get => m_UseCustomGeneration.Value;}
-	public bool SaveMaps                     {get => m_SaveMaps.Value;}
-	public float MinimumTileMultiplier       {get => m_MinimumTileMultiplier.Value;}
-	public float MaximumTileMultiplier       {get => m_MaximumTileMultiplier.Value;}
-	public float LowerIterationMultiplier    {get => m_LowerIterationMultiplier.Value;}
-	public float UpperIterationMultiplier    {get => m_UpperIterationMultiplier.Value;}
+	public bool UseCustomGeneration          {get; set;}
+	public bool SaveMaps                     {get; set;}
+	public float MinimumTileMultiplier       {get; set;}
+	public float MaximumTileMultiplier       {get; set;}
+	public float LowerIterationMultiplier    {get; set;}
+	public float UpperIterationMultiplier    {get; set;}
 	
-	public bool BouncyCruisers               {get => m_BouncyCruisers.Value;}
-	public bool ForbiddenPassages            {get => m_ForbiddenPassages.Value;}
+	public bool BouncyCruisers               {get; set;}
+	public bool ForbiddenPassages            {get; set;}
 	
-	public LogLevel LogLevels                {get => m_LogLevels.Value;}
-	public bool EnableVerboseGeneration      {get => m_EnableVerboseGeneration.Value;}
-	public bool EnableVerboseSerialization   {get => m_EnableVerboseSerialization.Value;}
-	public bool EnableVerboseDeserialization {get => m_EnableVerboseDeserialization.Value;}
+	public LogLevel LogLevels                {get; set;}
+	public bool EnableVerboseGeneration      {get; set;}
+	public bool EnableVerboseSerialization   {get; set;}
+	public bool EnableVerboseDeserialization {get; set;}
 	
-	public bool EnableHistory                {get => m_EnableHistory.Value;}
+	public bool EnableHistory                {get; set;}
 	
-	public bool UseSetSeed                   {get => m_UseSetSeed.Value;}
-	public int  Seed                         {get => m_Seed.Value;}
-	public bool IncrementSetSeed             {get => m_IncrementSetSeed.Value;}
+	public bool UseSetSeed                   {get; set;}
+	public int  Seed                         {get; set;}
+	public bool IncrementSetSeed             {get; set;}
 	
 	public Config() {
 		if (singleton != null) throw new InvalidOperationException("Singleton violation");
@@ -312,5 +320,148 @@ public sealed class Config {
 		
 		Config.Save();
 		Config.SaveOnConfigSet = true;
+		
+		InitFromConfigFile();
 	}
+	
+	public void InitFromConfigFile() {
+		GlobalEnable                 = m_GlobalEnable                .Value;
+		EnableNoncollectionPenalty   = m_EnableNoncollectionPenalty  .Value;
+		ExcludeCruiserScrap          = m_ExcludeCruiserScrap         .Value;
+		ExcludeSurfaceScrap          = m_ExcludeSurfaceScrap         .Value;
+		ExcludeHive                  = m_ExcludeHive                 .Value;
+		SaveMapObjects               = m_SaveMapObjects              .Value;
+		SaveEquipment                = m_SaveEquipment               .Value;
+		SaveScrap                    = m_SaveScrap                   .Value;
+		SaveHives                    = m_SaveHives                   .Value;
+		SaveCruisers                 = m_SaveCruisers                .Value;
+		SaveHazards                  = m_SaveHazards                 .Value;
+		SaveTurrets                  = m_SaveTurrets                 .Value;
+		SaveLandmines                = m_SaveLandmines               .Value;
+		SaveSpikeTraps               = m_SaveSpikeTraps              .Value;
+		UseCustomGeneration          = m_UseCustomGeneration         .Value;
+		SaveMaps                     = m_SaveMaps                    .Value;
+		MinimumTileMultiplier        = m_MinimumTileMultiplier       .Value;
+		MaximumTileMultiplier        = m_MaximumTileMultiplier       .Value;
+		LowerIterationMultiplier     = m_LowerIterationMultiplier    .Value;
+		UpperIterationMultiplier     = m_UpperIterationMultiplier    .Value;
+		BouncyCruisers               = m_BouncyCruisers              .Value;
+		ForbiddenPassages            = m_ForbiddenPassages           .Value;
+		LogLevels                    = m_LogLevels                   .Value;
+		EnableVerboseGeneration      = m_EnableVerboseGeneration     .Value;
+		EnableVerboseSerialization   = m_EnableVerboseSerialization  .Value;
+		EnableVerboseDeserialization = m_EnableVerboseDeserialization.Value;
+		EnableHistory                = m_EnableHistory               .Value;
+		UseSetSeed                   = m_UseSetSeed                  .Value;
+		Seed                         = m_Seed                        .Value;
+		IncrementSetSeed             = m_IncrementSetSeed            .Value;
+	}
+}
+
+public class ConfigNetworkSerializer<T> : Serializer<T> where T : Config {
+	/* Format:
+	 * bool GlobalEnable
+	 * bool EnableNoncollectionPenalty
+	 * bool ExcludeCruiserScrap
+	 * bool ExcludeSurfaceScrap
+	 * bool ExcludeHive
+	 * bool SaveMapObjects
+	 * bool SaveEquipment
+	 * bool SaveScrap
+	 * bool SaveHives
+	 * bool SaveCruisers
+	 * bool SaveHazards
+	 * bool SaveTurrets
+	 * bool SaveLandmines
+	 * bool SaveSpikeTraps
+	 * bool UseCustomGeneration
+	 * bool SaveMaps
+	 * bool BouncyCruisers
+	 * bool ForbiddenPassages
+	 * bool EnableHistory
+	 * bool UseSetSeed
+	 * bool IncrementSetSeed
+	 * 
+	 * float MinimumTileMultiplier
+	 * float MaximumTileMultiplier
+	 * float LowerIterationMultiplier
+	 * float UpperIterationMultiplier
+	 * int   Seed
+	 *     
+	 * Note that these config options are *not* sent to clients, because they don't matter to keeping 
+	 *  server/client synced
+	 * LogLevel (int) LogLevels
+	 * bool EnableVerboseGeneration
+	 * bool EnableVerboseSerialization
+	 * bool EnableVerboseDeserialization
+	*/
+	public override void Serialize(SerializationContext sc, T tgt) {
+		sc.AddBools<bool>(
+			[
+				tgt.GlobalEnable,
+				tgt.EnableNoncollectionPenalty,
+				tgt.ExcludeCruiserScrap,
+				tgt.ExcludeSurfaceScrap,
+				tgt.ExcludeHive,
+				tgt.SaveMapObjects,
+				tgt.SaveEquipment,
+				tgt.SaveScrap,
+				tgt.SaveHives,
+				tgt.SaveCruisers,
+				tgt.SaveHazards,
+				tgt.SaveTurrets,
+				tgt.SaveLandmines,
+				tgt.SaveSpikeTraps,
+				tgt.UseCustomGeneration,
+				tgt.SaveMaps,
+				tgt.BouncyCruisers,
+				tgt.ForbiddenPassages,
+				tgt.EnableHistory,
+				tgt.UseSetSeed,
+				tgt.IncrementSetSeed
+			], 
+			(bool b) => b
+		);
+		
+		sc.Add(tgt.MinimumTileMultiplier);
+		sc.Add(tgt.MaximumTileMultiplier);
+		sc.Add(tgt.LowerIterationMultiplier);
+		sc.Add(tgt.UpperIterationMultiplier);
+		sc.Add(tgt.Seed);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		IEnumerator<bool> bools = dc.ConsumeBools(21).GetEnumerator();
+		bools.MoveNext(); rt.GlobalEnable               = bools.Current;
+		bools.MoveNext(); rt.EnableNoncollectionPenalty = bools.Current;
+		bools.MoveNext(); rt.ExcludeCruiserScrap        = bools.Current;
+		bools.MoveNext(); rt.ExcludeSurfaceScrap        = bools.Current;
+		bools.MoveNext(); rt.ExcludeHive                = bools.Current;
+		bools.MoveNext(); rt.SaveMapObjects             = bools.Current;
+		bools.MoveNext(); rt.SaveEquipment              = bools.Current;
+		bools.MoveNext(); rt.SaveScrap                  = bools.Current;
+		bools.MoveNext(); rt.SaveHives                  = bools.Current;
+		bools.MoveNext(); rt.SaveCruisers               = bools.Current;
+		bools.MoveNext(); rt.SaveHazards                = bools.Current;
+		bools.MoveNext(); rt.SaveTurrets                = bools.Current;
+		bools.MoveNext(); rt.SaveLandmines              = bools.Current;
+		bools.MoveNext(); rt.SaveSpikeTraps             = bools.Current;
+		bools.MoveNext(); rt.UseCustomGeneration        = bools.Current;
+		bools.MoveNext(); rt.SaveMaps                   = bools.Current;
+		bools.MoveNext(); rt.BouncyCruisers             = bools.Current;
+		bools.MoveNext(); rt.ForbiddenPassages          = bools.Current;
+		bools.MoveNext(); rt.EnableHistory              = bools.Current;
+		bools.MoveNext(); rt.UseSetSeed                 = bools.Current;
+		bools.MoveNext(); rt.IncrementSetSeed           = bools.Current;
+		
+		dc.Consume(sizeof(float)).CastInto(out float x); rt.MinimumTileMultiplier    = x;
+		dc.Consume(sizeof(float)).CastInto(out       x); rt.MaximumTileMultiplier    = x;
+		dc.Consume(sizeof(float)).CastInto(out       x); rt.LowerIterationMultiplier = x;
+		dc.Consume(sizeof(float)).CastInto(out       x); rt.UpperIterationMultiplier = x;
+		dc.Consume(sizeof(int  )).CastInto(out int   y); rt.Seed = y;
+		
+		return rt;
+	}
+	
+	public override T Deserialize(DeserializationContext dc) => Deserialize((T)Config.Singleton, dc);
 }

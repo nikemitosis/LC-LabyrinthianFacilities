@@ -20,6 +20,8 @@ It also adds space for Hazards to DGameMap, making it two bytes bigger than prev
  - Removed spurious error messages about syncing save history files. 
  - Fixed nutcracker shotguns being preserved if you didn't kill the nutcracker. 
  - Fixed generation sometimes not adding new tiles. 
+ - Config is now synced when joining a server.
+   - Config is no longer automatically updated with `ConfigFile`; Changes via something like LethalConfig now universally require a restart. 
 
 ## Technical
  - #36 Added space for Hazard saving in `DGameMap` serialization

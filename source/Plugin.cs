@@ -254,6 +254,7 @@ public class MapHandler : NetworkBehaviour {
 			LoadGame();
 		} else {
 			MapHandler.Instance.RequestMapDataServerRpc(NetworkManager.Singleton.LocalClientId);
+			MapHandler.Instance.RequestConfigServerRpc(NetworkManager.Singleton.LocalClientId);
 			// clear old history
 			if (Config.Singleton.EnableHistory) {
 				FileInfo file = new FileInfo($"{SaveManager.ModSaveDirectory}/serverHistory.log");
@@ -451,7 +452,29 @@ public class MapHandler : NetworkBehaviour {
 		Plugin.LogInfo($"Received map objects from server! ({bytes.Length} bytes)");
 		var rt = new DeserializationContext(bytes).Deserialize(new MapHandlerNetworkSerializer());
 		if (!ReferenceEquals(rt,Instance)) Plugin.LogError($"Got a different MapHandler than Instance?");
-		Plugin.LogInfo($"Done syncing with server!");
+	}
+	
+	[ServerRpc(RequireOwnership=false)]
+	protected void RequestConfigServerRpc(ulong clientId) {
+		var cparams = new ClientRpcParams {
+			Send = new ClientRpcSendParams {
+				TargetClientIds = new ulong[1]{clientId}
+			}
+		};
+		Plugin.LogInfo($"Received request for config from client #{clientId}");
+		var s = new SerializationContext();
+		s.Serialize(Config.Singleton,new ConfigNetworkSerializer<Config>());
+		Plugin.LogInfo($"{s.Output.Count} bytes of config");
+		byte[] b = new byte[s.Output.Count];
+		s.Output.CopyTo(b,0);
+		SendConfigClientRpc(b,cparams);
+	}
+	
+	[ClientRpc]
+	protected void SendConfigClientRpc(byte[] bytes, ClientRpcParams cparams=default) {
+		Plugin.LogInfo($"Received config from server! ({bytes.Length} bytes)");
+		var rt = new DeserializationContext(bytes).Deserialize(new ConfigNetworkSerializer<Config>());
+		if (!ReferenceEquals(rt,Config.Singleton)) Plugin.LogError($"Got a different config than singleton?");
 	}
 	
 	private void RecordDay(int modSeed) {
@@ -471,12 +494,11 @@ public class MapHandler : NetworkBehaviour {
 		}
 	}
 	
-	public static Vector3 OFFSET = 3*Vector3.down;
 	public IEnumerator EnableBouncyCruisers() {
 		Cruiser[] cruisers = Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None);
 		foreach (Cruiser c in cruisers) {
 			c.gameObject.SetActive(false);
-			c.transform.position += OFFSET;
+			c.transform.position += Vector3.down;
 		}
 		yield return new WaitForSeconds(1f);
 		foreach (Cruiser c in cruisers) {
