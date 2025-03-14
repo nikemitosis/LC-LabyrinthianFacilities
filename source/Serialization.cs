@@ -19,7 +19,7 @@ public interface ISerializer<out T> {
 
 // If you see an error thrown from a cast in this class, it means you used the wrong serializer on something!
 public abstract class Serializer<T> : ISerializer<T> {
-	public void Serialize(SerializationContext sc, object tgt) {Serialize(sc,(T)tgt);}
+	public void Serialize(SerializationContext sc, object tgt) => Serialize(sc,(T)tgt);
 	
 	public abstract void Serialize(SerializationContext sc, T tgt);
 	
@@ -29,12 +29,12 @@ public abstract class Serializer<T> : ISerializer<T> {
 	public abstract T Deserialize(DeserializationContext dc);
 	
 	// The bulk of deserialization should occur here
-	protected abstract T Deserialize(T baseObject, DeserializationContext dc);
+	protected virtual T Deserialize(T baseObject, DeserializationContext dc) => baseObject;
 	
 	
 	// ISerializer.Finalize
 	// Called when deserialization is completely finished
-	public void Finalize(object obj) {this.Finalize((T)obj);}
+	public void Finalize(object obj) => this.Finalize((T)obj);
 	
 	public virtual void Finalize(T obj) {}
 }

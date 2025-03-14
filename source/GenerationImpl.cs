@@ -393,7 +393,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		// We want at most TileCountUpperBoundTiles, but we need room for TileCountLowerBound more tiles, 
 		// because that's the minimum number of tiles to add
 		// We can't get more tiles than we already have by removing them, though. 
-		int upperBound = Math.Min(TileCountUpperBound - TileCountLowerBound, tileCount);
+		int upperBound = Math.Min(TileCountUpperBound - PlacementLowerBound, tileCount);
 		
 		// We want to keep at least 80% of tiles to make sure we don't nuke too much of the map
 		// but we don't want to dip below the minimum number of tiles
@@ -648,6 +648,14 @@ public class DungeonFlowConverter : ITileGenerator {
 		foreach (var i in HandleDoorProps(map)) yield return i;
 		foreach (var i in HandleTileProps(map)) yield return i;
 		foreach (var i in HandleMapProps (map)) yield return i;
+		
+		if (Config.Singleton.ForbiddenPassages) {
+			foreach (DDoorway d in map.GetComponentsInChildren<DDoorway>()) {
+				if (!d.IsVacant && d.ActiveRandomObject != null && Rng.Next(100) == 0) {
+					d.ActiveRandomObject.SetActive(false);
+				}
+			}
+		}
 		
 		timer.Stop();
 		Plugin.LogDebug($"Finished prop handling in {timer.Elapsed.TotalSeconds} seconds");

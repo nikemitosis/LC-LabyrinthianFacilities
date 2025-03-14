@@ -186,25 +186,25 @@ public class Config {
 			section,
 			"SaveHazards",
 			false,
-			"NOT YET IMPLEMENTED; Save Hazards (turrets, landmines, etc.)"
+			"Save Hazards (turrets, landmines, etc.)"
 		);
 		m_SaveTurrets = Config.Bind(
 			section,
 			"SaveTurrets",
 			true,
-			"NOT YET IMPLEMENTED; Save Turrets (Requires SaveHazards)"
+			"Save Turrets (Requires SaveHazards)"
 		);
 		m_SaveLandmines = Config.Bind(
 			section,
 			"SaveLandmines",
 			true,
-			"NOT YET IMPLEMENTED; Save Landmines (Requires SaveHazards)"
+			"Save Landmines (Requires SaveHazards)"
 		);
 		m_SaveSpikeTraps = Config.Bind(
 			section,
 			"SaveSpikeTraps",
 			true,
-			"NOT YET IMPLEMENTED; Save Spike Traps (Requires SaveHazards)"
+			"Save Spike Traps (Requires SaveHazards)"
 		);
 		
 		section = "Features.InteriorGeneration";
@@ -256,7 +256,7 @@ public class Config {
 			section,
 			"ForbiddenPassages",
 			false,
-			"NOT YET IMPLEMENTED; "
+			"...?"
 		);
 		
 		section = "Debug.Logging";
@@ -264,7 +264,7 @@ public class Config {
 			section,
 			"LogLevels",
 			LogLevel.All,
-			"NOT YET IMPLEMENTED; Which log levels to show in the console"
+			"Which log levels to show in the console"
 		);
 		m_EnableVerboseGeneration = Config.Bind(
 			section,

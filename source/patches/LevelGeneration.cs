@@ -24,7 +24,7 @@ class GenerateLevel {
 	
 	public static int SetSeed = Config.Singleton.Seed;
 	#if SeedOverride
-	private static int[] Seeds = [1712096043,1530581813,1696599376];
+	private static int[] Seeds = [1071201032];
 	private static int SeedIndex = 0;
 	#endif
 	
@@ -183,7 +183,7 @@ class StartOfRoundPatch {
 	}
 	
 	#if SeedOverride
-	private static int[] Seeds = [26268466,1156627,72129288];
+	private static int[] Seeds = [65348538];
 	private static int Idx = 0;
 	
 	[HarmonyPatch("StartGame")]
@@ -234,10 +234,14 @@ public class RespawnBeesPatch {
 
 [HarmonyPatch(typeof(RoundManager))]
 public class DontDestroyRandomMapObjects {
-	// Pre-writing note: god help me
-	// Post-writing note: we might not even keep this when we start saving hazards which is funny to me
+	// stop roundmanager from deleting spawn points for mapobjects (if we aren't saving hazards)
 	[HarmonyPatch(nameof(RoundManager.SpawnMapObjects))]
 	public static IEnumerable<CodeInstruction> Transpiler(IEnumerable<CodeInstruction> instructions) {
+		if (Config.Singleton.SaveHazards) {
+			foreach (CodeInstruction instr in instructions) yield return instr;
+			yield break;
+		}
+		
 		// all this does is change the for loop condition at the very end to check for less than zero, instead 
 		// of less than the array length
 		int state = 0;

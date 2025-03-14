@@ -15,6 +15,7 @@ using Unity.Netcode;
 
 using DunGen.Graph;
 
+using Object = UnityEngine.Object;
 using Random = System.Random;
 
 public class DDoorway : Doorway {
@@ -310,7 +311,6 @@ public class DTile : Tile {
 	internal (Prop prop, int id, float weight)[] GlobalProps {get {return globalProps;}}
 	
 	// Protected/Private
-	protected List<GrabbableObject> ownedObjects;
 	protected PropSet[] localPropSets;
 	protected (Prop prop, int id, float weight)[] globalProps;
 	
@@ -554,7 +554,7 @@ public class DGameMap : GameMap {
 	}
 	
 	public void PreserveMapObjects() {
-		foreach (MapObject obj in GameObject.FindObjectsByType<MapObject>(FindObjectsSortMode.None)) {
+		foreach (GrabbableMapObject obj in Object.FindObjectsByType<GrabbableMapObject>(FindObjectsSortMode.None)) {
 			obj.Preserve();
 		}
 	}
@@ -586,8 +586,8 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	
 	public DGameMapSerializer() : base(null) {}
 	
-	private void DeserializeMapObjects<T>(MapObjectSerializer<T> ds, DeserializationContext dc)
-		where T : MapObject
+	private void DeserializeMapObjects<T>(GrabbableMapObjectSerializer<T> ds, DeserializationContext dc)
+		where T : GrabbableMapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
 		if (DeserializationContext.Verbose) Plugin.LogDebug(
@@ -612,8 +612,14 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 			new BatteryEquipmentSerializer<FueledEquipment> (tgt)
 		);
 		
-		// Hazards
-		sc.Add((ushort)0);
+		HazardBase[] hazards = tgt.GetComponentsInChildren<HazardBase>(true);
+		sc.Add((ushort)hazards.Length);
+		var ser = new HazardSerializer<HazardBase>(tgt);
+		foreach (var hazard in hazards) {
+			sc.Add((ushort)1); // prep for array of arrays (so we don't use so much space on identifiers)
+			sc.AddInline(hazard,ser);
+		}
+		
 	}
 	
 	protected override DGameMap Deserialize(
@@ -632,6 +638,12 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 		);
 		
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
+		var ds = new HazardSerializer<HazardBase>(rt);
+		for (ushort i=0; i<numHazardTypes; i++) {
+			dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardsOfType); // placeholder
+			
+			dc.ConsumeInline(ds);
+		}
 		
 		return rt;
 	}
@@ -755,27 +767,38 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 		
 		new MapObjectCollection(m).Serialize(
 			sc,
-			new ScrapNetworkSerializer           <Scrap>           (m),
-			new MapObjectNetworkSerializer       <Equipment>       (m),
-			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(m),
-			new GunEquipmentNetworkSerializer    <GunEquipment>    (m),
-			new BatteryEquipmentNetworkSerializer<FueledEquipment> (m)
+			new ScrapNetworkSerializer             <Scrap>           (m),
+			new GrabbableMapObjectNetworkSerializer<Equipment>       (m),
+			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(m),
+			new GunEquipmentNetworkSerializer      <GunEquipment>    (m),
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (m)
 		);
 		
-		sc.Add((ushort)0);
+		HazardBase[] hazards = m.GetComponentsInChildren<HazardBase>(true);
+		sc.Add((ushort)hazards.Length);
+		var ser = new HazardNetworkSerializer<HazardBase>(m);
+		foreach (var hazard in hazards) {
+			sc.Add((ushort)1); // prep for array of arrays (so we don't use so much space on identifiers)
+			sc.AddInline(hazard,ser);
+		}
 	}
 	
 	protected override DGameMap Deserialize(DGameMap map, DeserializationContext dc) {
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapNetworkSerializer           <Scrap>           (map),
-			new MapObjectNetworkSerializer       <Equipment>       (map),
-			new BatteryEquipmentNetworkSerializer<BatteryEquipment>(map),
-			new GunEquipmentNetworkSerializer    <GunEquipment>    (map),
-			new BatteryEquipmentNetworkSerializer<FueledEquipment> (map)
+			new ScrapNetworkSerializer             <Scrap>           (map),
+			new GrabbableMapObjectNetworkSerializer<Equipment>       (map),
+			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(map),
+			new GunEquipmentNetworkSerializer      <GunEquipment>    (map),
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (map)
 		);
 		
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
+		var ds = new HazardNetworkSerializer<HazardBase>(map);
+		for (ushort i=0; i<numHazardTypes; i++) {
+			dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardsOfType); // placeholder
+			dc.ConsumeInline(ds);
+		}
 		
 		return map;
 	}

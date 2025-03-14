@@ -32,7 +32,7 @@ using LogLevel = BepInEx.Logging.LogLevel;
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.5.0";
+	public const string VERSION = "0.5.1";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -224,6 +224,23 @@ public sealed class Plugin : BaseUnityPlugin {
 					$"Did not recognize vehicle '{vc.name}'. This vehicle will be ignored by {Plugin.NAME}"
 				);
 			}
+		}
+	
+		Plugin.LogInfo("Initializing Hazards");
+		Plugin.LogDebug("Initializing Turrets");
+		foreach (Turret t in Resources.FindObjectsOfTypeAll<Turret>()) {
+			t.transform.parent.gameObject.AddComponent<TurretHazard>()
+				.GetComponent<NetworkObject>().AutoObjectParentSync = false;
+		}
+		Plugin.LogDebug("Initializing Landmines");
+		foreach (Landmine t in Resources.FindObjectsOfTypeAll<Landmine>()) {
+			t.transform.parent.gameObject.AddComponent<LandmineHazard>()
+				.GetComponent<NetworkObject>().AutoObjectParentSync = false;
+		}
+		Plugin.LogDebug("Initializing Spike Traps");
+		foreach (SpikeRoofTrap t in Resources.FindObjectsOfTypeAll<SpikeRoofTrap>()) {
+			t.transform.parent.parent.parent.gameObject.AddComponent<SpikeTrapHazard>()
+				.GetComponent<NetworkObject>().AutoObjectParentSync = false;
 		}
 	}
 	
@@ -577,14 +594,23 @@ public class Moon : MonoBehaviour {
 	}
 	
 	public void PreserveMapObjects() {
-		Plugin.LogInfo("Hiding Map Objects!");
+		Plugin.LogInfo("Preserving Map Objects!");
 		this.ActiveMap?.PreserveMapObjects();
 	}
 	
 	public void PreserveEarlyObjects() {
+		Plugin.LogInfo("(Early Stage) Preserving Map Objects");
 		if (!Config.Singleton.SaveMaps && Config.Singleton.UseCustomGeneration) {
 			GameObject.Destroy(ActiveMap.RootTile);
 		}
+		
+		// Hazards are early because they are in the level's scene, not SampleSceneRelay. 
+		// This scene is unloaded between UnloadSceneObjectsEarly and DespawnPropsAtEndOfRound
+		// Config options are handled within Preserve function
+		foreach (HazardBase obj in Object.FindObjectsByType<HazardBase>(FindObjectsSortMode.None)) {
+			obj.Preserve();
+		}
+		
 		if (Config.Singleton.SaveHives) {
 			foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
 				bee.hive.GetComponent<Beehive>().SaveBees(bee);
@@ -803,9 +829,9 @@ public class MoonSerializer : Serializer<Moon> {
 		sc.Add(moon.name + "\0");
 		
 		// Serialize MapObjects
-		List<MapObject> mapObjects = new(moon.transform.childCount);
+		List<GrabbableMapObject> mapObjects = new(moon.transform.childCount);
 		foreach (Transform child in moon.transform) {
-			MapObject item = child.GetComponent<MapObject>();
+			GrabbableMapObject item = child.GetComponent<GrabbableMapObject>();
 			if (item != null) mapObjects.Add(item);
 		}
 		new MapObjectCollection(mapObjects).Serialize(
@@ -896,18 +922,18 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		sc.Add(moon.name+"\0");
 		
 		// MapObjects
-		List<MapObject> mapObjects = new(moon.transform.childCount);
+		List<GrabbableMapObject> mapObjects = new(moon.transform.childCount);
 		foreach (Transform child in moon.transform) {
-			MapObject item = child.GetComponent<MapObject>();
+			GrabbableMapObject item = child.GetComponent<GrabbableMapObject>();
 			if (item != null) mapObjects.Add(item);
 		}
 		new MapObjectCollection(mapObjects).Serialize(
 			sc,
-			new ScrapNetworkSerializer    <Scrap>           (moon),
-			new MapObjectNetworkSerializer<Equipment>       (moon),
-			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
-			new MapObjectNetworkSerializer<GunEquipment>    (moon),
-			new MapObjectNetworkSerializer<FueledEquipment> (moon)
+			new ScrapNetworkSerializer             <Scrap>           (moon),
+			new GrabbableMapObjectNetworkSerializer<Equipment>       (moon),
+			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(moon),
+			new GunEquipmentNetworkSerializer      <GunEquipment>    (moon),
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon)
 		);
 		
 		// Cruisers
@@ -928,9 +954,9 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 	}
 	
 	private void DeserializeMapObjects<T>(
-		DeserializationContext dc, MapObjectNetworkSerializer<T> ds
+		DeserializationContext dc, GrabbableMapObjectNetworkSerializer<T> ds
 	)
-		where T : MapObject
+		where T : GrabbableMapObject
 	{
 		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
 		if (DeserializationContext.Verbose) Plugin.LogDebug(
@@ -946,11 +972,11 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		// MapObjects
 		MapObjectCollection.Deserialize(
 			dc,
-			new ScrapNetworkSerializer    <Scrap>           (moon),
-			new MapObjectNetworkSerializer<Equipment>       (moon),
-			new MapObjectNetworkSerializer<BatteryEquipment>(moon),
-			new MapObjectNetworkSerializer<GunEquipment>    (moon),
-			new MapObjectNetworkSerializer<FueledEquipment> (moon)
+			new ScrapNetworkSerializer             <Scrap>           (moon),
+			new GrabbableMapObjectNetworkSerializer<Equipment>       (moon),
+			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(moon),
+			new GunEquipmentNetworkSerializer      <GunEquipment>    (moon),
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon)
 		);
 		
 		// Cruisers

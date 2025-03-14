@@ -2,6 +2,7 @@ namespace LabyrinthianFacilities.Patches;
 
 using System;
 
+using TMPro;
 using UnityEngine;
 
 using HarmonyLib;
@@ -144,4 +145,28 @@ public class FuelAccess {
 	private static Traverse<int> field(VehicleController i) => new Traverse(i).Field<int>("turboBoosts");
 	public static int Get(VehicleController i) => field(i).Value;
 	public static void Set(VehicleController i, int value) => field(i).Value = value;
+}
+
+[HarmonyPatch(typeof(Landmine))]
+public class LandmineAccess {
+	[HarmonyReversePatch]
+	[HarmonyPatch("Start")]
+	public static void Restart(object instance) => throw new NotImplementedException("Reverse Patch");
+}
+
+public class TerminalAccessibleObjectAccess {
+	public static GameObject MapRadarText(TerminalAccessibleObject i) {
+		return (i == null) ? (null) : (
+			new Traverse(i).Field<TextMeshProUGUI>("mapRadarText").Value.gameObject
+		);
+	}
+}
+
+public class SpikeRoofTrapAccess {
+	public static bool slamOnIntervals(SpikeRoofTrap tgt) {
+		return new Traverse(tgt).Field<bool>("slamOnIntervals").Value;
+	}
+	public static void slamOnIntervals(SpikeRoofTrap tgt, bool val) {
+		new Traverse(tgt).Field<bool>("slamOnIntervals").Value = val;
+	}
 }
