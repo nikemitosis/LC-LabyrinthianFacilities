@@ -96,6 +96,7 @@ public class CruiserLoadPatch {
 		__instance.carHP = OldHp;
 		Object.Destroy(flag);
 		StartOfRound.Instance.inShipPhase = OldState;
+		__instance.hasBeenSpawned = true;
 	}
 }
 

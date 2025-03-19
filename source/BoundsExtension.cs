@@ -206,7 +206,7 @@ public class BoundsMap<T> : ICollection<T> where T : class {
 		Bounds itemBounds = ItemBounds(item);
 		if (!this.Bounds.Intersects(itemBounds)) {
 			throw new ArgumentException(
-				$"Item {item} out of range of this BoundsMap which has bounds {this.Bounds}"
+				$"Item {item} with bounds {itemBounds} out of range of this BoundsMap which has bounds {this.Bounds}"
 			);
 		}
 		if (HasSplit) {

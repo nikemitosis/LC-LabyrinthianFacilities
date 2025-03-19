@@ -80,7 +80,7 @@ public class GrabbableMapObject : MapObject {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveMapObjects) return;
+		if (!Config.Singleton.SaveGrabbableMapObjects) return;
 		
 		var grabbable = this.Grabbable;
 		grabbable.isInShipRoom = (
@@ -124,7 +124,7 @@ public class Scrap : GrabbableMapObject {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveScrap) return;
+		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveScrap) return;
 		
 		base.Preserve();
 		var grabbable = this.Grabbable;
@@ -251,7 +251,7 @@ public class Beehive : Scrap {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveHives) return;
+		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveHives) return;
 		base.Preserve();
 		
 		if (this.Grabbable.isInShipRoom) {
@@ -272,7 +272,7 @@ public class Equipment : GrabbableMapObject {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveEquipment) return;
+		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveEquipment) return;
 		base.Preserve();
 	}
 }
@@ -377,7 +377,7 @@ public class Cruiser : NetworkBehaviour {
 	public bool IsBackDoorOpen = false;
 	
 	public void Preserve() {
-		if (!Config.Singleton.SaveMapObjects || !Config.Singleton.SaveCruisers) return;
+		if (!Config.Singleton.SaveCruisers) return;
 		
 		IsBackDoorOpen = this.transform.Find(
 			"Meshes/BackDoorContainer/BackDoor/OpenTrigger"
@@ -403,6 +403,7 @@ public class Cruiser : NetworkBehaviour {
 		
 		gameObj.transform.position = this.transform.position;
 		gameObj.transform.rotation = this.transform.rotation;
+		gameObj.AddComponent<DummyFlag>();
 		
 		netObj.Spawn();
 		RestoreClientRpc(this.NetworkObjectId, netObj.NetworkObjectId);
@@ -434,6 +435,7 @@ public class Cruiser : NetworkBehaviour {
 		// if clients have >5s delay, they will miss the door openning because they won't have 
 		// the door to open yet. Seems exceedingly rare/insignificant though, 
 		// since the clients should be able to open the door themselves. 
+		// AFTER-THOUGHT: move to the completion clause of DoneWithOldCruiserServerRpc?
 		if (IsServer) newC.StartCoroutine(newC.DelayUpdateBackDoor());
 		
 		foreach (var mo in older.GetComponentsInChildren<MapObject>(true)) {
@@ -564,6 +566,7 @@ public struct MapObjectCollection {
 	) {
 		foreach (ISerializer<MapObject> s in (ISerializer<MapObject>[])[ss,es,bes,ges,fes]) {
 			dc.Consume(sizeof(ushort)).CastInto(out ushort count);
+			if (DeserializationContext.Verbose) Plugin.LogDebug($"Found {count} items for {s}");
 			for (int i=0; i<count; i++) {
 				dc.ConsumeInline(s);
 			}
@@ -612,7 +615,7 @@ public abstract class MapObjectSerializer<T> : Serializer<T> where T : MapObject
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
 		dc.Consume(1);
 		T rt = null;
-		if (NetworkManager.Singleton.IsServer) {
+		if (NetworkManager.Singleton.IsServer && Parent != null) {
 			rt = Object.Instantiate(GetPrefab(id));
 			rt.GetComponent<NetworkObject>().Spawn();
 		}
@@ -823,6 +826,26 @@ public abstract class MapObjectNetworkSerializer<T> : Serializer<T> where T : Ma
 			);
 		}
 		sc.Add(netObj.NetworkObjectId);
+		
+		sc.Add(obj.transform.position.x);
+		sc.Add(obj.transform.position.y);
+		sc.Add(obj.transform.position.z);
+	}
+	
+	protected override T Deserialize(T rt, DeserializationContext dc) {
+		
+		dc.Consume(sizeof(float)).CastInto(out float x);
+		dc.Consume(sizeof(float)).CastInto(out float y);
+		dc.Consume(sizeof(float)).CastInto(out float z);
+		
+		rt.transform.position = new Vector3(x,y,z);
+		
+		if (Parent is DGameMap map) {
+			rt.FindParent(map: map);
+		} else {
+			rt.transform.parent = this.Parent.transform;
+		}
+		return rt;
 	}
 	
 	public override T Deserialize(DeserializationContext dc) {
@@ -841,12 +864,7 @@ public class GrabbableMapObjectNetworkSerializer<T> : MapObjectNetworkSerializer
 	public GrabbableMapObjectNetworkSerializer(Cruiser  p) : base(p) {}
 	
 	protected override T Deserialize(T s, DeserializationContext dc) {
-		// s.gameObject.AddComponent<DummyFlag>();
-		if (Parent is DGameMap map) {
-			s.FindParent(map: map);
-		} else {
-			s.transform.parent = this.Parent.transform;
-		}
+		base.Deserialize(s,dc);
 		
 		s.Grabbable.startFallingPosition = (
 			s.Grabbable.targetFloorPosition = s.transform.localPosition
@@ -1040,11 +1058,11 @@ public class CruiserSerializer : Serializer<Cruiser> {
 		int i=0;
 		foreach (bool b in dc.ConsumeBools(2)) {
 			switch (i) {
-			case 0:
-				running = b;
-			break; case 1:
-				isBackOpen = b;
-			break;
+				case 0:
+					running = b;
+				break; case 1:
+					isBackOpen = b;
+				break;
 			}
 			i++;
 		}
@@ -1075,11 +1093,12 @@ public class CruiserSerializer : Serializer<Cruiser> {
 	
 	public override Cruiser Deserialize(DeserializationContext dc) {
 		Cruiser rt = null;
-		if (NetworkManager.Singleton.IsServer) {
+		if (NetworkManager.Singleton.IsServer && parent != null) {
 			var g = GameObject.Instantiate(Cruiser.Prefab);
 			g.AddComponent<DummyFlag>();
 			g.GetComponent<NetworkObject>().Spawn();
 			rt = g.GetComponent<Cruiser>();
+			rt.gameObject.SetActive(false);
 		}
 		return Deserialize(rt,dc);
 	}

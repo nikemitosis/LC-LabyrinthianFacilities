@@ -773,11 +773,17 @@ public class GameMap : MonoBehaviour {
 				return null;
 			}
 		}
-		
 		foreach (Doorway d in newTile.Doorways) {
 			this.AddDoorway(d);
 		}
-		this.boundsMap.Add(newTile);
+		try {
+			this.boundsMap.Add(newTile);
+		} catch (ArgumentException) {
+			RemoveTile(new RemovalInfo(newTile));
+			// ensure that newTile is destroyed, in case GameMap.RemoveTile is overridden
+			if (newTile != null) GameObject.Destroy(newTile.gameObject); 
+			newTile = null;
+		}
 		
 		return newTile;
 	}

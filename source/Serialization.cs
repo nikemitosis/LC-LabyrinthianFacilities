@@ -53,11 +53,10 @@ public sealed class SerializationContext {
 	private Dictionary<object, ReferenceInfo> queuedReferences;
 	
 	public IList<byte> Output {get {return output.AsReadOnly();}}
-	public int Address {get => output.Count;}
+	public int Address {get => output.Count+1;}
 	
 	public SerializationContext() {
 		this.output = new();
-		this.output.Add(0);
 		this.references = new();
 		this.queuedReferences = new();
 	}
@@ -121,13 +120,13 @@ public sealed class SerializationContext {
 		if (references.ContainsKey(tgt)) {
 			throw new InvalidOperationException($"Cannot have two references to the same object ({tgt})");
 		}
-		references.Add(tgt,output.Count);
+		references.Add(tgt,Address);
 		if (queuedReferences.TryGetValue(tgt,out ReferenceInfo refInfo)) {
 			foreach (int address in refInfo.requests) {
-				this.output[address+0] = (byte)(output.Count >> 00);
-				this.output[address+1] = (byte)(output.Count >> 08);
-				this.output[address+2] = (byte)(output.Count >> 16);
-				this.output[address+3] = (byte)(output.Count >> 24);
+				this.output[address+0] = (byte)(this.Address >> 00);
+				this.output[address+1] = (byte)(this.Address >> 08);
+				this.output[address+2] = (byte)(this.Address >> 16);
+				this.output[address+3] = (byte)(this.Address >> 24);
 			}
 			queuedReferences.Remove(tgt);
 			
@@ -212,14 +211,16 @@ public sealed class DeserializationContext {
 	private Dictionary<int, ReferenceInfo> unresolvedReferences;
 	private int address;
 	
-	private ReadOnlySpan<byte> Data {get {return data;}}
+	public ReadOnlySpan<byte> Data {get => data;}
 	public int Address {
 		get => address;
 		private set => address = value;
 	}
 	
-	public DeserializationContext(byte[] data) {
-		this.data = data;
+	public DeserializationContext(ReadOnlySpan<byte> data) {
+		this.data = new byte[data.Length+1];
+		this.data[0] = 0;
+		data.CopyTo(((Span<byte>)this.data).Slice(1));
 		
 		this.references = new();
 		this.finalizers = new();
@@ -228,6 +229,7 @@ public sealed class DeserializationContext {
 	}
 	
 	public object Deserialize(ISerializer<object> rootDeserializer) {
+		if (Verbose) Plugin.LogDebug($"Deserializing with {Data.Length-1} bytes");
 		object rt = ConsumeInline(rootDeserializer);
 		
 		if (address != data.Length) {
@@ -256,7 +258,16 @@ public sealed class DeserializationContext {
 	
 	// Consume <length> bytes
 	public byte[] Consume(int length) {
-		var rt = Data.Slice(address,length).ToArray();
+		byte[] rt;
+		try {
+			rt = Data.Slice(address,length).ToArray();
+		} catch (ArgumentOutOfRangeException) {
+			Plugin.LogError(
+				$"Cannot consume beyond the bytestream;\n"
+				+$"Address + request > bytestream.Length ({Address:X} + {length:X} > {Data.Length:X})"
+			);
+			throw;
+		}
 		address += length;
 		return rt;
 	}
@@ -264,8 +275,16 @@ public sealed class DeserializationContext {
 	// Consume bytes until the next one would satisfy the given condition
 	public byte[] ConsumeUntil(Func<byte, bool> condition) {
 		int length = 0;
-		while (!condition(data[this.address + length])) {
-			length++;
+		try {
+			while (!condition(data[this.address + length])) {
+				length++;
+			}
+		} catch (ArgumentOutOfRangeException) {
+			Plugin.LogError(
+				$"Cannot consume beyond the bytestream;\n"
+				+$"Address + request > bytestream.Length ({Address:X} + {length:X} > {Data.Length:X})"
+			);
+			throw;
 		}
 		return this.Consume(length);
 	}
@@ -274,7 +293,11 @@ public sealed class DeserializationContext {
 		byte curByte = 0;
 		for (ulong i=0; i<count; i++) {
 			if (i % 8 == 0) {
-				curByte = this.Consume(1)[0];
+				try {
+					curByte = this.Consume(1)[0];
+				} catch (ArgumentOutOfRangeException) {
+					throw;
+				}
 			}
 			yield return (curByte & 0x01) != 0;
 			curByte >>= 1;
@@ -287,8 +310,12 @@ public sealed class DeserializationContext {
 		ISerializer<object> deserializer, 
 		Action<object> action=null
 	) {
-		
-		this.Consume(4).CastInto(out int addr);
+		int addr;
+		try {
+			this.Consume(4).CastInto(out addr);
+		} catch (ArgumentOutOfRangeException) {
+			throw;
+		}
 		
 		// Already resolved
 		if (addr == 0) return 0;
@@ -306,8 +333,13 @@ public sealed class DeserializationContext {
 				+$"Deserializer: {deserializer.GetType()})"
 			);
 		}
-		
 		if (Verbose) Plugin.LogDebug($"Q 0x{addr:X} | {deserializer.GetType()}");
+		if (addr >= Data.Length) {
+			Plugin.LogError(
+				$"Queued reference lays beyond the length of the bytestream ({addr} >= {Data.Length})"
+			);
+		throw new ArgumentOutOfRangeException($"addr: {addr} >= {Data.Length}");
+		}
 		
 		if (!unresolvedReferences.TryGetValue(addr,out ReferenceInfo refInfo)) {
 			refInfo = new();
@@ -347,7 +379,13 @@ public sealed class DeserializationContext {
 		int addr = address;
 		int finalizerIdx = finalizers.Count;
 		finalizers.Add(default);
-		var rt = deserializer.Deserialize(this);
+		object rt;
+		try {
+			rt = deserializer.Deserialize(this);
+		} catch (Exception e) {
+			Plugin.LogError($"Deserializer {deserializer} threw an exception at 0x{Address:X}: {e}");
+			throw;
+		}
 		finalizers[finalizerIdx] = (rt, deserializer.Finalize);
 		AddReference(addr, rt);
 		if (unresolvedReferences.TryGetValue(address, out ReferenceInfo refInfo)) {

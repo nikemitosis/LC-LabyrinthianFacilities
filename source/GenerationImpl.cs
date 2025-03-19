@@ -651,7 +651,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		
 		if (Config.Singleton.ForbiddenPassages) {
 			foreach (DDoorway d in map.GetComponentsInChildren<DDoorway>()) {
-				if (!d.IsVacant && d.ActiveRandomObject != null && Rng.Next(100) == 0) {
+				if (d.IsVacant && d.ActiveRandomObject != null && Rng.Next(100) == 0) {
 					d.ActiveRandomObject.SetActive(false);
 				}
 			}

@@ -7,6 +7,7 @@ using Util;
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Collections.ObjectModel;
 using System.IO;
 using System.Reflection;
 
@@ -32,7 +33,7 @@ using LogLevel = BepInEx.Logging.LogLevel;
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.5.1";
+	public const string VERSION = "0.6.0";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -250,10 +251,10 @@ public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
 	
-	private Dictionary<SelectableLevel,Moon> moons = null;
-	private Dictionary<string,Moon> unresolvedMoons = null;
+	private Dictionary<string,byte[]> serializedMoons = null;
 	
 	public Moon ActiveMoon {get; private set;}
+	public ReadOnlyDictionary<string,byte[]> SerializedMoons {get; private set;}
 	
 	public override void OnNetworkSpawn() {
 		if (Instance != null) {
@@ -263,14 +264,14 @@ public class MapHandler : NetworkBehaviour {
 		Instance = this;
 		
 		NetworkManager.OnClientStopped += MapHandler.OnDisconnect;
-		moons = new();
-		unresolvedMoons = new();
+		if (IsServer) NetworkManager.OnClientConnectedCallback += OnConnect;
+		serializedMoons = new();
+		SerializedMoons = new(serializedMoons);
 		Plugin.InitializeAssets();
 		
 		if (this.IsHost || this.IsServer) {
 			LoadGame();
 		} else {
-			MapHandler.Instance.RequestMapDataServerRpc(NetworkManager.Singleton.LocalClientId);
 			MapHandler.Instance.RequestConfigServerRpc(NetworkManager.Singleton.LocalClientId);
 			// clear old history
 			if (Config.Singleton.EnableHistory) {
@@ -281,9 +282,13 @@ public class MapHandler : NetworkBehaviour {
 		
 	}
 	public override void OnNetworkDespawn() {
+		if (IsServer) NetworkManager.OnClientConnectedCallback -= OnConnect;
 		MapHandler.Instance = null;
 		GameObject.Destroy(this.gameObject);
 	}
+	
+	// Ensure that late joiners (like via LateCompany) don't have a desynced moon
+	public void OnConnect(ulong clientId) => ClearActiveMoonClientRpc();
 	
 	public static void OnDisconnect(bool isHost) {
 		Plugin.LogInfo($"Disconnecting: Destroying local instance of MapHandler");
@@ -294,52 +299,116 @@ public class MapHandler : NetworkBehaviour {
 			cruiser.DoneWithOldCruiserServerRpc(disconnect: true);
 		}
 		
+		// Reset config (in case client had to change its config to sync with server)
+		Config.Singleton.InitFromConfigFile();
+		
 		Instance.NetworkManager.OnClientStopped -= MapHandler.OnDisconnect;
 		Instance.OnNetworkDespawn();
 		
 	}
 	
-	public Moon GetMoon(SelectableLevel level) {
-		Moon moon;
-		if (!this.moons.TryGetValue(level, out moon)) {
-			string name = $"moon:{level.name}";
-			
-			if (!unresolvedMoons.TryGetValue(name, out moon)) {
-				moon = NewMoon();
-				moon.name = name;
-			} else {
-				unresolvedMoons.Remove(name);
-			}
-			
-			moon.name = name;
-			this.moons.Add(level, moon);
-		}
-		return moon;
+	[ClientRpc]
+	public void ClearActiveMoonClientRpc() => ClearActiveMoon();
+	public void ClearActiveMoon() => StartCoroutine(ChangeActiveMoon(null));
+	
+	public void SaveMoon(Moon moon=null) {
+		moon ??= this.ActiveMoon;
+		if (moon == null) return;
+		
+		var ser = new SerializationContext();
+		ser.Serialize(moon,new MoonSerializer());
+		byte[] b = new byte[ser.Output.Count];
+		ser.Output.CopyTo(b,0);
+		this.serializedMoons[moon.name] = b;
 	}
 	
-	public Moon NewMoon() {
-		GameObject g = new GameObject();
+	// (When actually changing moons)
+	// 1. SERVER - Save & Despawn/Destroy current moon
+	//    CLIENT - Destroy current moon & orphan network objects
+	// 
+	// 2. SERVER - Load new moon from memory & send + network serialization
+	//    CLIENT - nothing
+	// 
+	// 3. SERVER - done
+	//    CLIENT - Load new moon from server (2x Deserialization)
+	public IEnumerator ChangeActiveMoon(SelectableLevel level) {
+		if ( // exit early if no change
+			this.ActiveMoon == null && level == null
+			|| this.ActiveMoon?.name == $"moon:{level?.name}"
+		) yield break;
+		
+		// Destroy old moon
+		if (this.ActiveMoon != null) {
+			if (IsServer) SaveMoon();
+			foreach (NetworkObject netobj in this.ActiveMoon?.GetComponentsInChildren<NetworkObject>(true)) {
+				if (netobj.IsSpawned) {
+					if (IsServer) {
+						netobj.Despawn(true);
+					} else {
+						netobj.transform.parent = null;
+					}
+				} else {
+					GameObject.Destroy(netobj.gameObject);
+				}
+			}
+			GameObject.Destroy(this.ActiveMoon.gameObject);
+		}
+		this.ActiveMoon = null;
+		
+		if (level == null) yield break;
+		string moonName = $"moon:{level.name}";
+		if (!IsServer) {
+			while (this.ActiveMoon?.name != moonName) yield return new WaitForSeconds(0.125f);
+			yield break;
+		}
+		// Below is server-only
+		
+		// Load new moon
+		Moon moon;
+		if (!this.serializedMoons.TryGetValue(moonName, out byte[] moonData)) {
+			moon = NewMoon(moonName);
+			SaveMoon(moon);
+			moonData = this.serializedMoons[moonName];
+		} else {
+			DeserializationContext dc = new(moonData);
+			moon = (Moon)dc.Deserialize(new MoonSerializer());
+			moon.transform.parent = this.transform;
+			yield return new WaitForSeconds(3f);
+		}
+		
+		SerializationContext sc = new();
+		sc.Serialize(moon,new MoonNetworkSerializer());
+		byte[] netData = new byte[sc.Output.Count];
+		sc.Output.CopyTo(netData,0);
+		
+		this.ActiveMoon = moon;
+		
+		ChangeActiveMoonClientRpc(moonData,netData);
+		yield break;
+	}
+	
+	[ClientRpc]
+	private void ChangeActiveMoonClientRpc(byte[] serializedMoon, byte[] netSerializedMoon) {
+		if (IsServer) return;
+		StartCoroutine(ChangeActiveMoonClientRoutine(serializedMoon,netSerializedMoon));
+	}
+	private IEnumerator ChangeActiveMoonClientRoutine(byte[] serializedMoon, byte[] netSerializedMoon) {
+		// Await current moon destruction
+		while (this.ActiveMoon != null) yield return null;
+		
+		((Moon)(
+			new DeserializationContext(serializedMoon).Deserialize(new MoonSerializer())
+		)).transform.parent = MapHandler.Instance.transform;
+		this.ActiveMoon = (Moon)(
+			new DeserializationContext(netSerializedMoon).Deserialize(new MoonNetworkSerializer())
+		);
+		yield break;
+	}
+	
+	public Moon NewMoon(string name) {
+		GameObject g = new GameObject(name);
 		g.transform.parent = this.transform;
 		return g.AddComponent<Moon>();
-	}
-	
-	public DGameMap GetMap(
-		SelectableLevel level, 
-		DungeonFlow flow, 
-		Action<GameMap> onComplete=null
-	) {
-		return GetMoon(level).GetMap(flow,onComplete);
-	}
-	
-	public void ClearActiveMoon() {
-		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
-		this.ActiveMoon = null;
-	}
-	
-	public void ChangeActiveMoon(SelectableLevel level) {
-		if (this.ActiveMoon != null) this.ActiveMoon.gameObject.SetActive(false);
-		this.ActiveMoon = GetMoon(level);
-		this.ActiveMoon.gameObject.SetActive(true);
 	}
 	
 	public IEnumerator Generate(
@@ -347,7 +416,9 @@ public class MapHandler : NetworkBehaviour {
 		DungeonFlowConverter tilegen, 
 		Action<GameMap> onComplete=null
 	) {
-		ChangeActiveMoon(level);
+		StartCoroutine(ChangeActiveMoon(level));
+		// await ChangeActiveMoon
+		while (this.ActiveMoon?.name != $"moon:{level.name}") yield return new WaitForSeconds(0.125f);
 		
 		yield return this.ActiveMoon.Generate(tilegen, onComplete);
 		
@@ -410,9 +481,16 @@ public class MapHandler : NetworkBehaviour {
 			Plugin.LogInfo($"No save data found for {GameNetworkManager.Instance.currentSaveFileName}");
 		}
 	}
-	public void LoadMoon(Moon m) {
-		m.transform.parent = this.transform;
-		this.unresolvedMoons.Add(m.name,m);
+	public void LoadMoon(byte[] data) {
+		int len = 0;
+		for (int i=0; i<data.Length; i++) {
+			if (data[i] == 0) {
+				len = i;
+				break;
+			}
+		}
+		string name = System.Text.Encoding.UTF8.GetString(data,0,len);
+		this.serializedMoons[name] = data;
 	}
 	
 	public void Clear() {
@@ -424,7 +502,6 @@ public class MapHandler : NetworkBehaviour {
 	
 	[ServerRpc(RequireOwnership=false)]
 	public void RequestMapDataServerRpc(ulong clientId) {
-		if (!(base.IsServer || base.IsHost)) return;
 		Plugin.LogInfo($"Sending map data to client #{clientId}!");
 		var cparams = new ClientRpcParams {
 			Send = new ClientRpcSendParams {
@@ -567,12 +644,9 @@ public class Moon : MonoBehaviour {
 	}
 	
 	public void LoadMap(DGameMap map) {
+		if (map == null) throw new NullReferenceException("map");
 		this.unresolvedMaps.Add(map.name,map);
 		map.transform.parent = this.transform;
-	}
-	
-	public void LoadCruiser(Cruiser cruiser) {
-		cruiser.SetMoon(this);
 	}
 	
 	public IEnumerator Generate(
@@ -771,11 +845,13 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 		if (!ReferenceEquals(o,MapHandler.Instance)) {
 			throw new ArgumentException($"MapHandler singleton violated");
 		}
-		var moons = MapHandler.Instance.GetComponentsInChildren<Moon>(true);
-		sc.Add((ushort)(moons.Length));
-		var serializer = new MoonSerializer();
-		foreach (Moon moon in moons) {
-			sc.AddInline(moon, serializer);
+		
+		o.SaveMoon();
+		
+		sc.Add((ushort)o.SerializedMoons.Count);
+		foreach (var kvpair in o.SerializedMoons) {
+			sc.Add((int)kvpair.Value.Length);
+			sc.Add(kvpair.Value);
 		}
 	}
 	
@@ -786,11 +862,16 @@ public class MapHandlerSerializer : Serializer<MapHandler> {
 		}
 		dc.Consume(2).CastInto(out ushort numMoons);
 		
-		// Captures for lambda
 		var rt = MapHandler.Instance;
-		var moonDeserializer = new MoonSerializer();
 		for (int i=0; i<numMoons; i++) {
-			rt.LoadMoon((Moon)dc.ConsumeInline(moonDeserializer));
+			int startAddress = dc.Address;
+			
+			dc.Consume(sizeof(int)).CastInto(out int len);
+			rt.LoadMoon(dc.Consume(len));
+			
+			if (DeserializationContext.Verbose) {
+				Plugin.LogDebug($"moon #{i}: 0x{startAddress:X}-0x{dc.Address:X}");
+			}
 		}
 		
 		return rt;
@@ -825,6 +906,11 @@ public class MapHandlerNetworkSerializer : Serializer<MapHandler> {
 }
 
 public class MoonSerializer : Serializer<Moon> {
+	
+	private bool Generate;
+	public MoonSerializer(bool generate=true) {this.Generate = generate;}
+	
+	
 	public override void Serialize(SerializationContext sc, Moon moon) {
 		sc.Add(moon.name + "\0");
 		
@@ -872,17 +958,23 @@ public class MoonSerializer : Serializer<Moon> {
 		);
 		
 		dc.Consume(2).CastInto(out ushort numCruisers);
+		if (DeserializationContext.Verbose) {
+			Plugin.LogDebug($"{moon?.name ?? "null"}: Found {numCruisers} cruisers");
+		}
 		var cruiserSerializer = new CruiserSerializer(moon);
 		for (int i=0; i<numCruisers; i++) {
 			dc.ConsumeInline(cruiserSerializer);
 		}
 		
 		dc.Consume(2).CastInto(out ushort numMaps);
-		var ser = new DGameMapSerializer();
-		for (int i=0; i<numMaps; i++) {
-			moon.LoadMap((DGameMap)dc.ConsumeInline(ser));
+		var ser = new DGameMapSerializer(moon);
+		if (DeserializationContext.Verbose) {
+			Plugin.LogDebug($"{moon?.name ?? "null"}: Found {numMaps} maps");
 		}
-		
+		for (int i=0; i<numMaps; i++) {
+			DGameMap map = (DGameMap)dc.ConsumeInline(ser);
+			moon?.LoadMap(map);
+		}
 		return moon;
 	}
 	
@@ -892,31 +984,12 @@ public class MoonSerializer : Serializer<Moon> {
 		).CastInto(out string id);
 		dc.Consume(1); // null terminator
 		
-		Moon rt = new GameObject(id).AddComponent<Moon>();
+		Moon rt = Generate ? (new GameObject(id).AddComponent<Moon>()) : null;
 		return Deserialize(rt, dc);
-	}
-	
-	public override void Finalize(Moon moon) {
-		moon.gameObject.SetActive(false);
 	}
 }
 
 public class MoonNetworkSerializer : Serializer<Moon> {
-	private void SerializeMapObjects<T>(
-		SerializationContext sc, 
-		Moon moon, 
-		Serializer<T> ser
-	) where T : MapObject {
-		List<T> objs = new(moon.transform.childCount);
-		foreach (Transform child in moon.transform) {
-			T item = child.GetComponent<T>();
-			if (item != null) objs.Add(item);
-		}
-		sc.Add((ushort)objs.Count);
-		foreach (T o in objs) {
-			sc.AddInline(o, ser);
-		}
-	}
 	
 	public override void Serialize(SerializationContext sc, Moon moon) {
 		sc.Add(moon.name+"\0");
@@ -953,21 +1026,6 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		}
 	}
 	
-	private void DeserializeMapObjects<T>(
-		DeserializationContext dc, GrabbableMapObjectNetworkSerializer<T> ds
-	)
-		where T : GrabbableMapObject
-	{
-		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		if (DeserializationContext.Verbose) Plugin.LogDebug(
-			$"Loading {count} {typeof(T)} objects for Moon '{ds.Parent.name}' from address 0x{dc.Address:X}"
-		);
-		
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds);
-		}
-	}
-	
 	protected override Moon Deserialize(Moon moon, DeserializationContext dc) {
 		// MapObjects
 		MapObjectCollection.Deserialize(
@@ -982,7 +1040,7 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		// Cruisers
 		dc.Consume(2).CastInto(out ushort numCruisers);
 		if (DeserializationContext.Verbose) Plugin.LogDebug(
-			$"Loading {numCruisers} cruisers for {moon.name} from address 0x{dc.Address:X}"
+			$"Loading {numCruisers} cruisers for {moon?.name} from address 0x{dc.Address:X}"
 		);
 		var cruiserSerializer = new CruiserNetworkSerializer(moon);
 		for (ushort i=0; i<numCruisers; i++) {
@@ -1005,16 +1063,12 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 		).CastInto(out string id);
 		dc.Consume(1); // null terminator
 		
-		Moon moon = MapHandler.Instance.transform.Find(id).GetComponent<Moon>();
+		Moon moon = MapHandler.Instance.transform.Find(id)?.GetComponent<Moon>();
 		if (moon == null) {
-			Plugin.LogError($"Couldn't find moon '{id}'");
+			Plugin.LogError($"Couldn't find moon '{id ?? "null"}'");
 			return null;
 		}
 		
 		return Deserialize(moon, dc);
-	}
-	
-	public override void Finalize(Moon moon) {
-		moon.gameObject.SetActive(false);
 	}
 }

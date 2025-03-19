@@ -584,20 +584,11 @@ public class DGameMap : GameMap {
 
 public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	
-	public DGameMapSerializer() : base(null) {}
+	private Moon parent;
+	public Moon Parent {get => parent;}
 	
-	private void DeserializeMapObjects<T>(GrabbableMapObjectSerializer<T> ds, DeserializationContext dc)
-		where T : GrabbableMapObject
-	{
-		dc.Consume(sizeof(ushort)).CastInto(out ushort count);
-		if (DeserializationContext.Verbose) Plugin.LogDebug(
-			$"Loading {count} {typeof(T)} objects for DGameMap '{ds.Parent.name}' from address "
-			+$"0x{dc.Address:X}"
-		);
-		for (ushort i=0; i<count; i++) {
-			dc.ConsumeInline(ds);
-		}
-	}
+	public DGameMapSerializer(Moon p) : base(null) {parent = p;}
+	public DGameMapSerializer() : this(null) {}
 	
 	public override void Serialize(SerializationContext sc, DGameMap tgt) {
 		base.TileSer = new DTileSerializer(tgt);
@@ -627,6 +618,10 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	) {
 		base.TileSer = new DTileSerializer(rt);
 		base.Deserialize(rt,dc);
+		if (Parent == null) { // probably the most stupid way to do this
+			GameObject.Destroy(rt.gameObject);
+			rt = null;
+		}
 		
 		MapObjectCollection.Deserialize(
 			dc,
@@ -649,6 +644,7 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 	}
 	
 	public override void Finalize(DGameMap map) {
+		if (map == null) return;
 		map.InitializeLoadedMapObjects();
 		map.gameObject.SetActive(false);
 	}
