@@ -170,4 +170,11 @@ public class SpikeRoofTrapAccess {
 	public static void slamOnIntervals(SpikeRoofTrap tgt, bool val) {
 		new Traverse(tgt).Field<bool>("slamOnIntervals").Value = val;
 	}
+	
+	public static float slamInterval(SpikeRoofTrap tgt) {
+		return new Traverse(tgt).Field<float>("slamInterval").Value;
+	}
+	public static void slamInterval(SpikeRoofTrap tgt,float val) {
+		new Traverse(tgt).Field<float>("slamInterval").Value = val;
+	}
 }

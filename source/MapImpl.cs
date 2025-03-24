@@ -594,21 +594,20 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 		base.TileSer = new DTileSerializer(tgt);
 		base.Serialize(sc,tgt);
 		
-		new MapObjectCollection(tgt).Serialize(
-			sc,
-			new ScrapSerializer           <Scrap>           (tgt),
-			new EquipmentSerializer       <Equipment>       (tgt),
-			new BatteryEquipmentSerializer<BatteryEquipment>(tgt),
-			new GunEquipmentSerializer    <GunEquipment>    (tgt),
-			new BatteryEquipmentSerializer<FueledEquipment> (tgt)
-		);
+		MapObject[] allMapObjects = tgt.GetComponentsInChildren<MapObject>(true);
+		Dictionary<string,List<MapObject>> mapObjLists = new();
+		foreach (var mapObj in allMapObjects) {
+			if (!mapObjLists.TryGetValue(mapObj.name, out List<MapObject> list)) {
+				list = new(allMapObjects.Length);
+				mapObjLists.Add(mapObj.name, list);
+			}
+			list.Add(mapObj);
+		}
+		sc.Add((ushort)mapObjLists.Count);
 		
-		HazardBase[] hazards = tgt.GetComponentsInChildren<HazardBase>(true);
-		sc.Add((ushort)hazards.Length);
-		var ser = new HazardSerializer<HazardBase>(tgt);
-		foreach (var hazard in hazards) {
-			sc.Add((ushort)1); // prep for array of arrays (so we don't use so much space on identifiers)
-			sc.AddInline(hazard,ser);
+		var groupSerializer = new MapObjectGroupSerializer<MapObject>(tgt);
+		foreach (List<MapObject> mapObjList in mapObjLists.Values) {
+			sc.AddInline(mapObjList, groupSerializer);
 		}
 		
 	}
@@ -623,21 +622,12 @@ public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {
 			rt = null;
 		}
 		
-		MapObjectCollection.Deserialize(
-			dc,
-			new ScrapSerializer           <Scrap>           (rt),
-			new EquipmentSerializer       <Equipment>       (rt),
-			new BatteryEquipmentSerializer<BatteryEquipment>(rt),
-			new GunEquipmentSerializer    <GunEquipment>    (rt),
-			new BatteryEquipmentSerializer<FueledEquipment> (rt)
-		);
+		dc.Consume(sizeof(ushort)).CastInto(out ushort numMapObjTypes);
 		
-		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
-		var ds = new HazardSerializer<HazardBase>(rt);
-		for (ushort i=0; i<numHazardTypes; i++) {
-			dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardsOfType); // placeholder
-			
-			dc.ConsumeInline(ds);
+		var groupSer = new MapObjectGroupSerializer<MapObject>(rt);
+		
+		for (ushort i=0; i<numMapObjTypes; i++) {
+			dc.ConsumeInline(groupSer);
 		}
 		
 		return rt;

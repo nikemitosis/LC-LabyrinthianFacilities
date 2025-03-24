@@ -39,6 +39,112 @@ public abstract class Serializer<T> : ISerializer<T> {
 	public virtual void Finalize(T obj) {}
 }
 
+// DO NOT INHERIT THESE
+public interface IItemSerializer<out T> : ISerializer<T> {
+	public bool InGroup {get => IGroupSerializer?.IItemSerializer == this;}
+	public ICollectionSerializer IGroupSerializer {get; set;}
+}
+public interface ICollectionSerializer {
+	public bool IsValid {get;}
+	public IItemSerializer<object> IItemSerializer {get;}
+}
+
+public abstract class ItemSerializer<T> : Serializer<T>, IItemSerializer<T> {
+	
+	public ICollectionSerializer IGroupSerializer {
+		get => GroupSerializer;
+		set => GroupSerializer = (CollectionSerializer<T>)value;
+	}
+	private CollectionSerializer<T> m_GroupSerializer = null;
+	
+	public CollectionSerializer<T> GroupSerializer {
+		get => m_GroupSerializer; 
+		set {
+			m_GroupSerializer = value;
+			Step = false;
+		}
+	}
+	
+	public bool InGroup {get => IGroupSerializer?.IItemSerializer == this;}
+	private bool Step = false;
+	
+	public sealed override void Serialize(SerializationContext sc, T tgt) {
+		if (!InGroup || !Step) SerializePreamble(sc,tgt);
+		if (!InGroup ||  Step) SerializeData(sc,tgt);
+		Step = true;
+	}
+	public sealed override T Deserialize(DeserializationContext dc) {
+		T rt = InGroup ? GroupSerializer.GetItemSkeleton() : DeserializePreamble(dc);
+		DeserializeData(rt,dc);
+		return rt;
+	}
+	protected sealed override T Deserialize(T rt, DeserializationContext dc) => base.Deserialize(rt,dc);
+	
+	protected abstract void SerializePreamble(SerializationContext sc,T tgt);
+	protected abstract void SerializeData    (SerializationContext sc,T tgt);
+	
+	protected abstract T DeserializePreamble(     DeserializationContext dc);
+	// return is not going to be rt for value types
+	protected abstract T DeserializeData    (T rt,DeserializationContext dc); 
+}
+
+// Intended to be used if you have several elements with the same preamble
+public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>,ICollectionSerializer {
+	public IItemSerializer<object> IItemSerializer  {
+		get => (IItemSerializer<object>)ItemSerializer; // why do I need a cast here?
+		protected set => ItemSerializer = (IItemSerializer<T>)value;
+	}
+	public bool IsValid {get => ItemSerializer?.IGroupSerializer == this;}
+	
+	public IItemSerializer<T> ItemSerializer {get; protected set;} = null;
+	
+	public virtual int Count {get; protected set;}
+	
+	public virtual void Init(IItemSerializer<T> ser) {
+		ser.IGroupSerializer = this;
+		ItemSerializer = ser;
+	}
+	
+	protected virtual void PreserializeStep(ICollection<T> tgt) {}
+	protected sealed override void SerializePreamble(SerializationContext sc, ICollection<T> tgt) {
+		PreserializeStep(tgt);
+		
+		foreach (T item in tgt) {
+			sc.AddInline(item,(IItemSerializer<object>)ItemSerializer);
+			break;
+		}
+		sc.Add(tgt.Count);
+	}
+	
+	protected sealed override void SerializeData(SerializationContext sc, ICollection<T> tgt) {
+		foreach (T item in tgt) {
+			sc.AddInline(item,(IItemSerializer<object>)ItemSerializer);
+		}
+	}
+	
+	// not sealed in case inheritors want to return a dictionary, for example, instead of a List
+	// or if they want to use a different method to derive Count
+	protected override ICollection<T> DeserializePreamble(DeserializationContext dc) {
+		DeserializeSharedPreamble(dc);
+		dc.Consume(sizeof(int)).CastInto(out int count);
+		this.Count = count;
+		return new List<T>(count);
+	}
+	// not sealed in case inheritors do not know Count from DeserializePreamble 
+	// (e.g. something similar to null-terminated string)
+	protected override ICollection<T> DeserializeData(ICollection<T> rt, DeserializationContext dc) {
+		for (int i=0; i<Count; i++) {
+			rt.Add((T)dc.ConsumeInline((IItemSerializer<object>)ItemSerializer));
+		}
+		return rt;
+	}
+	
+	protected abstract void DeserializeSharedPreamble(DeserializationContext dc);
+	
+	// Create a skeleton item for ItemSerializer.DeserializeData to fill
+	public abstract T GetItemSkeleton();
+}
+
 public sealed class SerializationContext {
 	
 	public static bool Verbose = false;
