@@ -14,13 +14,22 @@ public interface ISerializer<out T> {
 	
 	public T Deserialize(DeserializationContext dc);
 	
+	// Called when deserialization is completely finished
 	public void Finalize(object obj);
 }
 
-// If you see an error thrown from a cast in this class, it means you used the wrong serializer on something!
-public abstract class Serializer<T> : ISerializer<T> {
-	public void Serialize(SerializationContext sc, object tgt) => Serialize(sc,(T)tgt);
+internal interface IAutocastSerializer<T> : ISerializer<T> {
+	// To be implemented
+	public void Serialize(SerializationContext sc, T tgt);
+	public void Finalize(T tgt) {}
 	
+	// Auto-implemented
+	void ISerializer<T>.Serialize(SerializationContext sc, object tgt) => Serialize(sc,(T)tgt);
+	void ISerializer<T>.Finalize(object tgt) => Finalize((T)tgt);
+}
+
+// If you see an error thrown from a cast in this class, it means you used the wrong serializer on something!
+public abstract class Serializer<T> : IAutocastSerializer<T> {
 	public abstract void Serialize(SerializationContext sc, T tgt);
 	
 	// ISerializer.Deserialize
@@ -31,92 +40,114 @@ public abstract class Serializer<T> : ISerializer<T> {
 	// The bulk of deserialization should occur here
 	protected virtual T Deserialize(T baseObject, DeserializationContext dc) => baseObject;
 	
-	
-	// ISerializer.Finalize
-	// Called when deserialization is completely finished
-	public void Finalize(object obj) => this.Finalize((T)obj);
-	
-	public virtual void Finalize(T obj) {}
+	public virtual void Finalize(T tgt) {}
 }
 
-// DO NOT INHERIT THESE
+// should not be implemented directly
 public interface IItemSerializer<out T> : ISerializer<T> {
-	public bool InGroup {get => IGroupSerializer?.IItemSerializer == this;}
-	public ICollectionSerializer IGroupSerializer {get; set;}
+	
+	// To be implmeneted:
+	public ICollectionSerializer GroupSerializer {get; set;}
+	
+	public void SerializePreamble(SerializationContext sc,object tgt);
+	public void SerializeData    (SerializationContext sc,object tgt);
+	
+	public T DeserializePreamble(DeserializationContext dc);
+	public T DeserializeData(object rt, DeserializationContext dc);
+	
+	// Auto-implemented
+	public sealed bool InGroup {get => GroupSerializer?.ItemSerializer == this;}
+	
+	// can't use sealed
+	void ISerializer<T>.Serialize(SerializationContext sc,object tgt) {
+		if (!InGroup) SerializePreamble(sc,tgt);
+		SerializeData(sc,tgt);
+	}
+	
+	T ISerializer<T>.Deserialize(DeserializationContext dc) {
+		T rt = InGroup ? (T)GroupSerializer.GetItemSkeleton() : DeserializePreamble(dc);
+		return DeserializeData(rt,dc);
+	}
 }
+// should not be implemented directly
 public interface ICollectionSerializer {
-	public bool IsValid {get;}
-	public IItemSerializer<object> IItemSerializer {get;}
+	public bool IsValid {get => ItemSerializer?.GroupSerializer == this;}
+	public IItemSerializer<object> ItemSerializer {get; set;}
+	public object GetItemSkeleton();
+}
+public interface IAutocastCollectionSerializer<T> : ICollectionSerializer {
+	// To be implemented:
+	public new IItemSerializer<T> ItemSerializer {get; set;}
+	public new T GetItemSkeleton();
+	
+	
+	// Auto-implemented
+	IItemSerializer<object> ICollectionSerializer.ItemSerializer {
+		get => (IItemSerializer<object>)ItemSerializer;
+		set => ItemSerializer = (IItemSerializer<T>)value;
+	}
+	object ICollectionSerializer.GetItemSkeleton() => GetItemSkeleton();
 }
 
-public abstract class ItemSerializer<T> : Serializer<T>, IItemSerializer<T> {
+internal interface IAutocastItemSerializer<T> : IItemSerializer<T> {
+	// To be implemented:
+	public void SerializePreamble(SerializationContext sc, T tgt);
+	public void SerializeData    (SerializationContext sc, T tgt);
+	public T DeserializeData(T rt,DeserializationContext dc);
+	public void Finalize(T tgt) {}
 	
-	public ICollectionSerializer IGroupSerializer {
-		get => GroupSerializer;
-		set => GroupSerializer = (CollectionSerializer<T>)value;
+	
+	// Auto-implemented
+	void IItemSerializer<T>.SerializePreamble(SerializationContext sc, object tgt) {
+		this.SerializePreamble(sc,(T)tgt);
 	}
-	private CollectionSerializer<T> m_GroupSerializer = null;
-	
-	public CollectionSerializer<T> GroupSerializer {
-		get => m_GroupSerializer; 
-		set {
-			m_GroupSerializer = value;
-			Step = false;
-		}
+	void IItemSerializer<T>.SerializeData(SerializationContext sc, object tgt) {
+		this.SerializeData(sc,(T)tgt);
 	}
-	
-	public bool InGroup {get => IGroupSerializer?.IItemSerializer == this;}
-	private bool Step = false;
-	
-	public sealed override void Serialize(SerializationContext sc, T tgt) {
-		if (!InGroup || !Step) SerializePreamble(sc,tgt);
-		if (!InGroup ||  Step) SerializeData(sc,tgt);
-		Step = true;
+	T IItemSerializer<T>.DeserializeData(object rt, DeserializationContext dc) {
+		return this.DeserializeData((T)rt,dc);
 	}
-	public sealed override T Deserialize(DeserializationContext dc) {
-		T rt = InGroup ? GroupSerializer.GetItemSkeleton() : DeserializePreamble(dc);
-		DeserializeData(rt,dc);
-		return rt;
-	}
-	protected sealed override T Deserialize(T rt, DeserializationContext dc) => base.Deserialize(rt,dc);
+	void ISerializer<T>.Finalize(object t) => this.Finalize((T)t);
+}
+
+public abstract class ItemSerializer<T> : IAutocastItemSerializer<T> {
 	
-	protected abstract void SerializePreamble(SerializationContext sc,T tgt);
-	protected abstract void SerializeData    (SerializationContext sc,T tgt);
+	// IItemSerializer implementation
+	public ICollectionSerializer GroupSerializer {get; set;}
 	
-	protected abstract T DeserializePreamble(     DeserializationContext dc);
-	// return is not going to be rt for value types
-	protected abstract T DeserializeData    (T rt,DeserializationContext dc); 
+	// IAutocastItemSerializer "implementation"
+	public abstract void SerializePreamble(SerializationContext sc,T tgt);
+	public abstract void SerializeData    (SerializationContext sc,T tgt);
+	
+	public abstract T DeserializePreamble(     DeserializationContext dc);
+	public abstract T DeserializeData    (T rt,DeserializationContext dc); 
+	// ^ return value is not going ref-equals rt for value types
 }
 
 // Intended to be used if you have several elements with the same preamble
-public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>,ICollectionSerializer {
-	public IItemSerializer<object> IItemSerializer  {
-		get => (IItemSerializer<object>)ItemSerializer; // why do I need a cast here?
-		protected set => ItemSerializer = (IItemSerializer<T>)value;
-	}
-	public bool IsValid {get => ItemSerializer?.IGroupSerializer == this;}
-	
-	public IItemSerializer<T> ItemSerializer {get; protected set;} = null;
+public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>, IAutocastCollectionSerializer<T> {
+	public IItemSerializer<T> ItemSerializer {get; set;} = null;
 	
 	public virtual int Count {get; protected set;}
 	
 	public virtual void Init(IItemSerializer<T> ser) {
-		ser.IGroupSerializer = this;
+		if (ser != null) ser.GroupSerializer = this;
 		ItemSerializer = ser;
 	}
 	
 	protected virtual void PreserializeStep(ICollection<T> tgt) {}
-	protected sealed override void SerializePreamble(SerializationContext sc, ICollection<T> tgt) {
+	public sealed override void SerializePreamble(SerializationContext sc, ICollection<T> tgt) {
 		PreserializeStep(tgt);
 		
 		foreach (T item in tgt) {
-			sc.AddInline(item,(IItemSerializer<object>)ItemSerializer);
+			// dont use SerializeInline because we don't want to register this as a referable object
+			ItemSerializer.SerializePreamble(sc,item); 
 			break;
 		}
 		sc.Add(tgt.Count);
 	}
 	
-	protected sealed override void SerializeData(SerializationContext sc, ICollection<T> tgt) {
+	public sealed override void SerializeData(SerializationContext sc, ICollection<T> tgt) {
 		foreach (T item in tgt) {
 			sc.AddInline(item,(IItemSerializer<object>)ItemSerializer);
 		}
@@ -124,7 +155,7 @@ public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>,I
 	
 	// not sealed in case inheritors want to return a dictionary, for example, instead of a List
 	// or if they want to use a different method to derive Count
-	protected override ICollection<T> DeserializePreamble(DeserializationContext dc) {
+	public override ICollection<T> DeserializePreamble(DeserializationContext dc) {
 		DeserializeSharedPreamble(dc);
 		dc.Consume(sizeof(int)).CastInto(out int count);
 		this.Count = count;
@@ -132,7 +163,7 @@ public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>,I
 	}
 	// not sealed in case inheritors do not know Count from DeserializePreamble 
 	// (e.g. something similar to null-terminated string)
-	protected override ICollection<T> DeserializeData(ICollection<T> rt, DeserializationContext dc) {
+	public override ICollection<T> DeserializeData(ICollection<T> rt, DeserializationContext dc) {
 		for (int i=0; i<Count; i++) {
 			rt.Add((T)dc.ConsumeInline((IItemSerializer<object>)ItemSerializer));
 		}
@@ -143,6 +174,7 @@ public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>,I
 	
 	// Create a skeleton item for ItemSerializer.DeserializeData to fill
 	public abstract T GetItemSkeleton();
+	object ICollectionSerializer.GetItemSkeleton() => GetItemSkeleton();
 }
 
 public sealed class SerializationContext {

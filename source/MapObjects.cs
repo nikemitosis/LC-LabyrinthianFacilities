@@ -398,7 +398,6 @@ public class Cruiser : NetworkBehaviour {
 		
 		gameObj.transform.position = this.transform.position;
 		gameObj.transform.rotation = this.transform.rotation;
-		gameObj.AddComponent<DummyFlag>();
 		
 		netObj.Spawn();
 		RestoreClientRpc(this.NetworkObjectId, netObj.NetworkObjectId);
@@ -408,6 +407,8 @@ public class Cruiser : NetworkBehaviour {
 	public void RestoreClientRpc(ulong oldId, ulong newId) {
 		NetworkObject older = NetworkManager.Singleton.SpawnManager.SpawnedObjects[oldId];
 		NetworkObject newer = NetworkManager.Singleton.SpawnManager.SpawnedObjects[newId];
+		
+		newer.gameObject.AddComponent<DummyFlag>();
 		
 		// Why does this cause a softlock?
 		// Something with reparenting, but why does StopIgnition being disabled matter?
@@ -575,15 +576,20 @@ public enum EquipmentSerializationFlags {
 	Battery=0x1,
 	Fuel=0x2
 }
-
-public class MapObjectGroupSerializer<T> : CollectionSerializer<T> where T : MapObject {
+public interface IMapObjectGroupSerializer : ICollectionSerializer {
+	public MapObject Prefab {get;}
+	public MonoBehaviour Parent {get;}
+}
+public class MapObjectGroupSerializer<T> : CollectionSerializer<T>, IMapObjectGroupSerializer where T : MapObject {
 	
+	MapObject IMapObjectGroupSerializer.Prefab {get => Prefab;}
 	public T Prefab;
 	public MonoBehaviour Parent {get; protected set;}
 	
 	public MapObjectGroupSerializer(MonoBehaviour p) {
 		if (!(
-			p is Moon
+			p == null 
+			|| p is Moon
 			|| p is DGameMap
 			|| p is Cruiser
 		)) throw new ArgumentException($"Parent type {p.GetType()} not a valid MapObject parent");
@@ -597,6 +603,10 @@ public class MapObjectGroupSerializer<T> : CollectionSerializer<T> where T : Map
 	
 	protected override void PreserializeStep(ICollection<T> mapObjects) {
 		foreach(T item in mapObjects) {
+			if (item == null) {
+				Plugin.LogError("Null mapObject {item} in collection");
+				continue;
+			}
 			ChooseSerializer(item);
 			break;
 		}
@@ -608,7 +618,7 @@ public class MapObjectGroupSerializer<T> : CollectionSerializer<T> where T : Map
 		
 		ChooseSerializer(GetPrefab(ident));
 		
-		if (!IsValid) {
+		if (!(this as ICollectionSerializer).IsValid) {
 			throw new InvalidOperationException(
 				$"CollectionSerializer has no relationship with an ItemSerializer"
 			);
@@ -625,82 +635,97 @@ public class MapObjectGroupSerializer<T> : CollectionSerializer<T> where T : Map
 	}
 	
 	public virtual void ChooseSerializer(MapObject mapObject) {
+		if (mapObject == null) {
+			Plugin.LogError($"MapObjectGroupSerializer: Cannot choose a serializer based off of 'null'");
+			this.ItemSerializer = null;
+			return;
+		}
 		Type type = mapObject.GetType();
 		
 		IItemSerializer<MapObject> itemSerializer;
-		if (type == typeof(SpikeTrapHazard)) {
-			itemSerializer = new SpikeTrapHazardSerializer <SpikeTrapHazard >(Parent);
-		} else if (type == typeof(HazardBase)) {
-			itemSerializer = new HazardSerializer          <HazardBase      >(Parent);
-		} else if (type == typeof(GunEquipment)) {
-			itemSerializer = new GunEquipmentSerializer    <GunEquipment    >(Parent);
-		} else if (type == typeof(Scrap)) {
-			itemSerializer = new ScrapSerializer           <Scrap           >(Parent);
-		} else if (type == typeof(BatteryEquipment)) {
-			itemSerializer = new BatteryEquipmentSerializer<BatteryEquipment>(Parent); 
-		} else if (type == typeof(Equipment)) {
-			itemSerializer = new EquipmentSerializer       <Equipment       >(Parent);
+		if (typeof(GrabbableMapObject).IsAssignableFrom(type)) {
+			if (typeof(Scrap).IsAssignableFrom(type)) {
+				if (typeof(GunEquipment).IsAssignableFrom(type)) {
+					itemSerializer = new GunEquipmentSerializer    <GunEquipment    >(Parent);
+				} else {
+					itemSerializer = new ScrapSerializer           <Scrap           >(Parent);
+				}
+			} else if (typeof(Equipment).IsAssignableFrom(type)) {
+				if (typeof(BatteryEquipment).IsAssignableFrom(type)) {
+					itemSerializer = new BatteryEquipmentSerializer<BatteryEquipment>(Parent); 
+				} else {
+					itemSerializer = new EquipmentSerializer       <Equipment       >(Parent);
+				}
+			} else {
+				itemSerializer = null;
+			}
+		} else if (typeof(HazardBase).IsAssignableFrom(type)) {
+			if (typeof(SpikeTrapHazard).IsAssignableFrom(type)) {
+				itemSerializer = new SpikeTrapHazardSerializer <SpikeTrapHazard >(Parent);
+			} else {
+				itemSerializer = new HazardSerializer          <HazardBase      >(Parent);
+			}
 		} else {
-			itemSerializer = null; 
-			Plugin.LogError($"Could not find a serializer for '{Prefab.GetType()}'");
+			itemSerializer = null;
 		}
-		this.Init((IItemSerializer<T>)itemSerializer);
+		
+		if (itemSerializer == null) {
+			Plugin.LogError($"Could not find a serializer for '{type}'");
+		} else {
+			this.Init((IItemSerializer<T>)itemSerializer);
+		}
 	}
-}
-public class MapObjectGroupSerializer : MapObjectGroupSerializer<MapObject> {
-	public MapObjectGroupSerializer(MonoBehaviour m) : base(m) {}
 }
 
 public abstract class MapObjectSerializer<T> : ItemSerializer<T> where T : MapObject {
 	public abstract T GetPrefab(string id);
 	
-	private MonoBehaviour parent;
 	public MonoBehaviour Parent {get; private set;}
 	
-	public new MapObjectGroupSerializer<T> GroupSerializer {
-		get => (MapObjectGroupSerializer<T>)base.GroupSerializer;
-		set => base.GroupSerializer = value;
+	public new IMapObjectGroupSerializer GroupSerializer {
+		get => (IMapObjectGroupSerializer)base.GroupSerializer;
+		set => base.GroupSerializer = (IMapObjectGroupSerializer)value;
 	}
 	
 	public MapObjectSerializer(MonoBehaviour m) {
-		if (!(m is Moon || m is DGameMap || m is Cruiser)) {
+		if (!(m == null || m is Moon || m is DGameMap || m is Cruiser)) {
 			throw new InvalidCastException($"{m.GetType()} is not a valid parent type for a MapObject");
 		}
-		this.parent = m;
+		this.Parent = m;
 	}
 	
 	/* Format: 
 	 * Identifier: string
 	 * position: Vector3
 	*/
-	protected override void SerializePreamble(SerializationContext sc, T tgt) {
+	public override void SerializePreamble(SerializationContext sc, T tgt) {
 		sc.Add(tgt.name.Substring(0,tgt.name.Length - "(Clone)".Length));
 		sc.Add(new byte[]{(byte)0});
 	}
-	protected override void SerializeData(SerializationContext sc, T tgt) {
+	public override void SerializeData(SerializationContext sc, T tgt) {
 		sc.Add(tgt.transform.position.x);
 		sc.Add(tgt.transform.position.y);
 		sc.Add(tgt.transform.position.z);
 	}
 	
-	protected override T DeserializePreamble(DeserializationContext dc) {
+	public override T DeserializePreamble(DeserializationContext dc) {
 		dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
 		dc.Consume(1);
 		T rt = null;
 		if (NetworkManager.Singleton.IsServer && Parent != null) {
-			T prefab = GroupSerializer?.Prefab ?? GetPrefab(id);
+			T prefab = (T)(GroupSerializer?.Prefab ?? GetPrefab(id));
 			rt = Object.Instantiate(prefab.gameObject).GetComponent<T>();
 			rt.GetComponent<NetworkObject>().Spawn();
 		}
 		return rt;
 	}
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		dc.Consume(sizeof(float)).CastInto(out float x);
 		dc.Consume(sizeof(float)).CastInto(out float y);
 		dc.Consume(sizeof(float)).CastInto(out float z);
 		
 		if (rt == null) return rt;
-		
+		if (this.Parent == null) Plugin.LogError($"Null Parent for MapObjectSerializer");
 		rt.transform.position = new Vector3(x,y,z);
 		rt.transform.parent = this.Parent.transform;
 		
@@ -715,12 +740,12 @@ public abstract class GrabbableMapObjectSerializer<T> : MapObjectSerializer<T> w
 	/* Format:
 	 * yrot: byte (degrees rounded to nearest multiple of two)
 	*/
-	protected override void SerializeData(SerializationContext sc, T tgt) {
+	public override void SerializeData(SerializationContext sc, T tgt) {
 		base.SerializeData(sc,tgt);
 		sc.Add((byte)(tgt.transform.rotation.eulerAngles.y / 2));
 	}
 	
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		base.DeserializeData(rt,dc);
 		
 		dc.Consume(sizeof(byte)).CastInto(out byte yRotRounded);
@@ -749,12 +774,12 @@ public class ScrapSerializer<T> : GrabbableMapObjectSerializer<T> where T : Scra
 	 *     base
 	 *     ScrapValue: int
 	*/
-	protected override void SerializeData(SerializationContext sc, T scrap) {
+	public override void SerializeData(SerializationContext sc, T scrap) {
 		base.SerializeData(sc,scrap);
 		sc.Add(scrap.Grabbable.scrapValue);
 	}
 	
-	protected override T DeserializeData(
+	public override T DeserializeData(
 		T rt, DeserializationContext dc
 	) {
 		base.DeserializeData(rt,dc);
@@ -776,13 +801,13 @@ public class GunEquipmentSerializer<T> : ScrapSerializer<T> where T : GunEquipme
 	 * bool: safetyOn
 	 * int:  numShells
 	*/
-	protected override void SerializeData(SerializationContext sc, T tgt) {
+	public override void SerializeData(SerializationContext sc, T tgt) {
 		base.SerializeData(sc,tgt);
 		sc.Add(tgt.Safety);
 		sc.Add(tgt.NumShells);
 	}
 	
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		base.DeserializeData(rt,dc);
 		dc.Consume(sizeof(bool)).CastInto(out bool safety   );
 		dc.Consume(sizeof(int )).CastInto(out int  numShells);
@@ -804,12 +829,12 @@ public class BatteryEquipmentSerializer<T> : EquipmentSerializer<T> where T : Ba
 	
 	public BatteryEquipmentSerializer(MonoBehaviour p) : base(p) {}
 	
-	protected override void SerializeData(SerializationContext sc, T tgt) {
+	public override void SerializeData(SerializationContext sc, T tgt) {
 		base.SerializeData(sc,tgt);
 		sc.Add(tgt.Charge);
 	}
 	
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		base.DeserializeData(rt,dc);
 		dc.Consume(sizeof(float)).CastInto(out float charge);
 		if (rt != null) rt.Charge = charge;
@@ -837,7 +862,7 @@ public class HazardSerializer<T> : MapObjectSerializer<T>  where T : HazardBase 
 	 * rotation: Vector3
 	 * code: byte[2]
 	*/
-	protected override void SerializeData(SerializationContext sc, T tgt) {
+	public override void SerializeData(SerializationContext sc, T tgt) {
 		base.SerializeData(sc,tgt);
 		
 		sc.Add(tgt.transform.rotation.eulerAngles.x);
@@ -847,7 +872,7 @@ public class HazardSerializer<T> : MapObjectSerializer<T>  where T : HazardBase 
 		sc.Add(tgt.GetComponentInChildren<TerminalAccessibleObject>(true).objectCode.Substring(0,2));
 	}
 	
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		base.DeserializeData(rt,dc);
 		
 		dc.Consume(sizeof(float)).CastInto(out float x);
@@ -873,13 +898,13 @@ public class SpikeTrapHazardSerializer<T> : HazardSerializer<T> where T : SpikeT
 	 * base
 	 * slamInterval: int (0 => playerDetection)
 	*/
-	protected override void SerializeData(SerializationContext sc,T tgt) {
+	public override void SerializeData(SerializationContext sc,T tgt) {
 		base.SerializeData(sc,tgt);
 		bool playerDetection = !SpikeRoofTrapAccess.slamOnIntervals(tgt.HazardScript);
 		float serializedValue = playerDetection ? 0.0f : SpikeRoofTrapAccess.slamInterval(tgt.HazardScript);
 		sc.Add(serializedValue);
 	}
-	protected override T DeserializeData(T rt, DeserializationContext dc) {
+	public override T DeserializeData(T rt, DeserializationContext dc) {
 		base.DeserializeData(rt,dc);
 		
 		dc.Consume(sizeof(float)).CastInto(out float slamInterval);
