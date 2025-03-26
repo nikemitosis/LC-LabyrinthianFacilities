@@ -33,7 +33,7 @@ using LogLevel = BepInEx.Logging.LogLevel;
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.6.1";
+	public const string VERSION = "0.6.2";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -43,7 +43,7 @@ public sealed class Plugin : BaseUnityPlugin {
 	
 	// for internal use, makes it so I can see my own debug/info logs without seeing everyone else's
 	private static uint PROMOTE_LOG = 0;
-	public static bool TreatWarningsAsErrors = true;
+	public static bool TreatWarningsAsErrors = false;
 	
 	// From and for UnityNetcodePatcher
 	private void NetcodePatch() {
