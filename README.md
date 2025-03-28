@@ -1,7 +1,7 @@
 # DISCLAIMER - EXPECT GAME-BREAKING BUGS!
 
 This is a fairly large mod, created by a single developer. It is very possible that you may encounter game-breaking bugs. If you run into a bug that's not [listed on github](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues?q=is%3Aissue%20state%3Aopen%20label%3Abug%20OR%20label%3A"mod%20incompatibility"%20), feel free to [create an issue](https://github.com/nikemitosis/LC-LabyrinthianFacilities/issues/new?template=Blank+issue). If you run into a bug and create an issue, it often helps if you can include your save history, found in
-`<LC's save directory>/LabyrinthianFacilities/<savename>History.log`. 
+`<LC's save directory>/LabyrinthianFacilities/<savename>History.log` (provided that you have histories enabled in the config, on by default) 
 
 It is also worth noting that the format of savedata for this mod is not set in stone; that is to say that updates may break savedata relevant to this mod (but other savedata like furniture, scrap in ship, quota, etc. should be safe). Patches will not break saves (e.g. v0.2.0 to v0.2.1), but minor updates (e.g. v0.2.0 to v0.3.0) might, especially in v0.x.x. 
 
