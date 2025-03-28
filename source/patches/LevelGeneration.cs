@@ -22,7 +22,6 @@ using Doorway=LabyrinthianFacilities.Doorway;
 [HarmonyPatch(typeof(DungeonGenerator))]
 class GenerateLevel {
 	
-	public static int SetSeed = Config.Singleton.Seed;
 	#if SeedOverride
 	private static int[] Seeds = [1071201032];
 	private static int SeedIndex = 0;
@@ -32,10 +31,21 @@ class GenerateLevel {
 	[HarmonyPrefix]
 	public static bool CustomGenerate(DungeonGenerator __instance) {
 		try {
+			int seed;
 			#if !SeedOverride
-			int seed = Config.Singleton.UseSetSeed ? SetSeed : __instance.Seed;
+			if (Config.Singleton.UseSetSeed) {
+				seed = Config.Singleton.Seed;
+				if (Config.Singleton.IncrementSetSeed) {
+					seed += (
+						TimeOfDay.Instance.quotaVariables.deadlineDaysAmount
+						* TimeOfDay.Instance.timesFulfilledQuota
+					) + TimeOfDay.Instance.daysUntilDeadline;
+				}
+			} else {
+				seed = __instance.Seed;
+			}
 			#else
-			int seed = Seeds[SeedIndex++];
+			seed = Seeds[SeedIndex++];
 			SeedIndex %= Seeds.Length;
 			#endif
 			
@@ -57,9 +67,6 @@ class GenerateLevel {
 				(GameMap map) => GenerateLevel.ChangeStatus(__instance,GenerationStatus.Complete)
 			));
 			
-			if (Config.Singleton.UseSetSeed && Config.Singleton.IncrementSetSeed) {
-				SetSeed++;
-			}
 		} catch (Exception e) {
 			Plugin.LogError($"{e}");
 			throw;

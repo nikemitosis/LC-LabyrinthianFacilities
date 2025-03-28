@@ -162,6 +162,11 @@ public class WeightedList<T> : IEnumerable<T>, ICollection<T> {
 		weights = new();
 		summedWeight = 0.0f;
 	}
+	public WeightedList(int size) {
+		items = new(size);
+		weights = new(size);
+		summedWeight = 0.0f;
+	}
 	public WeightedList(WeightedList<T> copyFrom) {
 		items = new(copyFrom.Count);
 		weights = new(copyFrom.Count);

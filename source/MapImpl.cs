@@ -38,8 +38,8 @@ public class DDoorway : Doorway {
 	}
 	
 	// Protected/Private
-	protected Prop[] alwaysBlockers;
-	protected Prop[] alwaysDoors;
+	protected List<Prop> alwaysBlockers;
+	protected List<Prop> alwaysDoors;
 	protected WeightedList<Prop> randomBlockerSet;
 	protected WeightedList<Prop> randomDoorSet;
 	
@@ -122,7 +122,7 @@ public class DDoorway : Doorway {
 		
 		var dg = this.GetComponent<DunGen.Doorway>();
 		
-		List<Prop> objs = new();
+		List<Prop> objs = new(dg.BlockerSceneObjects.Count);
 		for (int i=0; i<dg.BlockerSceneObjects.Count; i++) {
 			var blocker = dg.BlockerSceneObjects[i];
 			if (blocker == null) continue;
@@ -130,9 +130,9 @@ public class DDoorway : Doorway {
 			b.Enable();
 			objs.Add(b);
 		}
-		this.alwaysBlockers = objs.ToArray();
+		this.alwaysBlockers = objs;
 		
-		objs.Clear();
+		objs = new(dg.ConnectorSceneObjects.Count);
 		for (int i=0; i<dg.ConnectorSceneObjects.Count; i++) {
 			var door = dg.ConnectorSceneObjects[i];
 			if (door == null) continue;
@@ -140,9 +140,9 @@ public class DDoorway : Doorway {
 			d.Disable();
 			objs.Add(d);
 		}
-		this.alwaysDoors = objs.ToArray();
+		this.alwaysDoors = objs;
 		
-		this.randomBlockerSet = new();
+		this.randomBlockerSet = new(dg.BlockerPrefabWeights.Count);
 		foreach (var entry in dg.BlockerPrefabWeights) {
 			var blocker = entry.GameObject;
 			if (blocker == null) continue;
@@ -151,7 +151,7 @@ public class DDoorway : Doorway {
 			this.randomBlockerSet.Add(b,entry.Weight);
 		}
 		
-		this.randomDoorSet = new();
+		this.randomDoorSet = new(dg.ConnectorPrefabWeights.Count);
 		foreach (var entry in dg.ConnectorPrefabWeights) {
 			var door = entry.GameObject;
 			if (door == null) continue;
@@ -252,6 +252,15 @@ public class DDoorway : Doorway {
 		this.activeRandomObject?.Disable();
 		this.activeRandomObject = null;
 	}
+	
+	public bool RemoveProp(Prop p) {
+		return (
+			alwaysBlockers.Remove(p) 
+			|| alwaysDoors.Remove(p) 
+			|| randomBlockerSet.Remove(p) 
+			|| randomDoorSet.Remove(p)
+		);
+	}
 }
 
 public class Prop : MonoBehaviour {
@@ -261,6 +270,9 @@ public class Prop : MonoBehaviour {
 	public bool IsMapProp  {get; set;} = false;
 	
 	public bool IsDoorProp => IsBlocker || IsConnector;
+	public DTile Tile => this.GetComponentInParent<DTile>(this.gameObject.activeInHierarchy);
+	public DDoorway Doorway => this.GetComponentInParent<DDoorway>(this.gameObject.activeInHierarchy);
+	public MonoBehaviour Parent => IsDoorProp ? Doorway : Tile;
 	
 	public void SetActive(bool value) {if (value) Enable(); else Disable();}
 	
@@ -278,6 +290,14 @@ public class Prop : MonoBehaviour {
 			return;
 		}
 		this.gameObject.SetActive(false);
+	}
+	
+	protected virtual void OnDestroy() {
+		if (IsDoorProp) {
+			this.Doorway.RemoveProp(this);
+		} else {
+			this.Tile.RemoveProp(this);
+		}
 	}
 }
 
@@ -307,12 +327,12 @@ public class PropSet : WeightedList<Prop> {
 
 public class DTile : Tile {
 	// Properties
-	internal PropSet[] LocalPropSets {get {return localPropSets;}}
-	internal (Prop prop, int id, float weight)[] GlobalProps {get {return globalProps;}}
+	internal IList<PropSet> LocalPropSets {get {return localPropSets.AsReadOnly();}}
+	internal IList<(Prop prop, int id, float weight)> GlobalProps {get {return globalProps.AsReadOnly();}}
 	
 	// Protected/Private
-	protected PropSet[] localPropSets;
-	protected (Prop prop, int id, float weight)[] globalProps;
+	protected List<PropSet> localPropSets;
+	protected List<(Prop prop, int id, float weight)> globalProps;
 	
 	private void OnDestroy() {
 		if (this.Map != null) {
@@ -426,27 +446,46 @@ public class DTile : Tile {
 		
 		// Local Props
 		var localPropSets = this.GetComponentsInChildren<DunGen.LocalPropSet>(includeInactive:true);
-		List<PropSet> psets = new();
+		List<PropSet> psets = new(localPropSets.Length);
 		foreach (var localPropSet in localPropSets) {
 			psets.Add(new PropSet(localPropSet));
 		}
-		this.localPropSets = psets.ToArray();
+		this.localPropSets = psets;
 		
 		// Global Props
 		var globs = this.GetComponentsInChildren<DunGen.GlobalProp>(includeInactive:true);
-		this.globalProps = new (Prop prop, int id, float weight)[globs.Length];
+		this.globalProps = new List<(Prop prop, int id, float weight)>(globs.Length);
 		for (int i=0; i<globs.Length; i++) {
 			DunGen.GlobalProp globalProp = globs[i];
 			if (globalProp?.gameObject == null) continue;
 			
 			Prop prop = globalProp.GetComponent<Prop>() ?? globalProp.gameObject.AddComponent<Prop>();
 			prop.IsMapProp = true;
-			this.globalProps[i] = (
+			this.globalProps.Add((
 				prop, 
 				globalProp.PropGroupID, 
 				(globalProp.MainPathWeight + globalProp.BranchPathWeight) / 2.0f
-			);
+			));
 		}
+	}
+	
+	public bool RemoveProp(Prop p) {
+		bool rt = false;
+		foreach (PropSet ps in this.localPropSets) {
+			rt = rt || ps.Remove(p);
+		}
+		for (int i=0; i<this.globalProps.Count;) {
+			if (this.globalProps[i].prop == p) {
+				rt = true;
+				this.globalProps.RemoveAt(i);
+			} else {
+				i++;
+			}
+		}
+		foreach (Doorway d in this.Doorways) {
+			rt = rt || ((DDoorway)d).RemoveProp(p);
+		}
+		return rt;
 	}
 	
 	public IList<Prop> GetProps() {

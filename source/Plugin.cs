@@ -269,7 +269,7 @@ public class MapHandler : NetworkBehaviour {
 		SerializedMoons = new(serializedMoons);
 		Plugin.InitializeAssets();
 		
-		if (this.IsHost || this.IsServer) {
+		if (this.IsServer) {
 			LoadGame();
 		} else {
 			MapHandler.Instance.RequestConfigServerRpc(NetworkManager.Singleton.LocalClientId);

@@ -292,7 +292,7 @@ public class Config {
 		m_EnableHistory = Config.Bind(
 			section,
 			"EnableHistory",
-			false,
+			true,
 			"Enables recording of seeds, interiors, and moons each day, for each save. Located in the same place as savedata. "
 		);
 		
