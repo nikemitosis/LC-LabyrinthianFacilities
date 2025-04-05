@@ -1,6 +1,5 @@
 namespace LabyrinthianFacilities;
 
-using DgConversion;
 using Serialization;
 using Util;
 
@@ -30,10 +29,12 @@ using Object = UnityEngine.Object;
 using LogLevel = BepInEx.Logging.LogLevel;
 
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
+[BepInIncompatibility("Zaggy1024.PathfindingLib")]
+[BepInDependency("GGMD.GenericInteriors", BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.6.3";
+	public const string VERSION = "0.7.0";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;
@@ -94,6 +95,8 @@ public sealed class Plugin : BaseUnityPlugin {
 		LogInfo($"{NAME} is Awoken!");
 	}
 	
+	private static bool PluginLoaded(string guid) => BepInEx.Bootstrap.Chainloader.PluginInfos.ContainsKey(guid);
+	
 	public static void LogDebug  (string message) {
 		if (PROMOTE_LOG > 0) {
 			LogInfo(message);
@@ -133,6 +136,8 @@ public sealed class Plugin : BaseUnityPlugin {
 		if (PROMOTE_LOG > 5) return;
 		if ((Config.Singleton.LogLevels & LogLevel.Fatal) != 0) Logger.LogFatal(message);
 	}
+	
+	public static void LogException(Exception ex) => LogError($"{ex}");
 	
 	public static void InitializeAssets() {
 		if (initializedAssets) return;
@@ -179,6 +184,10 @@ public sealed class Plugin : BaseUnityPlugin {
 				break;
 			}
 			tile.gameObject.AddComponent<DTile>();
+			
+			foreach (NetworkObject netObj in tile.GetComponentsInChildren<NetworkObject>(true)) {
+				netObj.AutoObjectParentSync = false;
+			}
 		}
 		
 		Plugin.LogInfo("Initializing Doorways");
@@ -243,6 +252,8 @@ public sealed class Plugin : BaseUnityPlugin {
 			t.transform.parent.parent.parent.gameObject.AddComponent<SpikeTrapHazard>()
 				.GetComponent<NetworkObject>().AutoObjectParentSync = false;
 		}
+		
+		if (PluginLoaded("GGMD.GenericInteriors")) Compatibility.GenericInteriors.Initialize();
 	}
 	
 }
@@ -250,6 +261,8 @@ public sealed class Plugin : BaseUnityPlugin {
 public class MapHandler : NetworkBehaviour {
 	public static MapHandler Instance {get; private set;}
 	internal static GameObject prefab = null;
+	
+	public static event Action<Moon> OnNewMoon;
 	
 	private Dictionary<string,byte[]> serializedMoons = null;
 	
@@ -408,7 +421,9 @@ public class MapHandler : NetworkBehaviour {
 	public Moon NewMoon(string name) {
 		GameObject g = new GameObject(name);
 		g.transform.parent = this.transform;
-		return g.AddComponent<Moon>();
+		Moon rt = g.AddComponent<Moon>();
+		OnNewMoon?.Invoke(rt);
+		return rt;
 	}
 	
 	public IEnumerator Generate(
@@ -602,6 +617,9 @@ public class MapHandler : NetworkBehaviour {
 }
 
 public class Moon : MonoBehaviour {
+	
+	public static event Action<DGameMap> OnNewMap;
+	
 	protected Dictionary<DungeonFlow,DGameMap> maps = new();
 	protected Dictionary<string,DGameMap> unresolvedMaps = new();
 	
@@ -623,6 +641,7 @@ public class Moon : MonoBehaviour {
 			} else {
 				unresolvedMaps.Remove(name);
 			}
+			OnNewMap?.Invoke(map);
 			maps.Add(flow,map);
 		}
 		return map;

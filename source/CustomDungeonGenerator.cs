@@ -148,6 +148,11 @@ public class DoorwayManager : IDoorwayManager {
 	
 	protected virtual void SetLeaf(Doorway d, Vector3 approxPos=default) {
 		if (approxPos == default) approxPos = ApproxPosition(d);
+		if (leaves.ContainsKey(approxPos)) {
+			throw new InvalidOperationException(
+				$"How do we have two leaves at {approxPos}? ({d} & leaves[approxPos])"
+			);
+		}
 		UnsetDoorway(d);
 		doorways[d] = DoorType.LEAF;
 		leaves.Add(approxPos,d);
@@ -167,10 +172,18 @@ public class DoorwayManager : IDoorwayManager {
 		UnsetDoorway(c.d1);
 		UnsetDoorway(c.d2);
 		if (c.d1.Fits(c.d2)) {
+			if (potentialConnections.ContainsKey(approxPos)) {
+				Plugin.LogError($"Two potential connections at the same position? ({approxPos})");
+				return;
+			}
 			doorways[c.d1] = DoorType.POTENTIAL_CONNECTOR;
 			if (doorways.ContainsKey(c.d2)) doorways[c.d2] = DoorType.POTENTIAL_CONNECTOR;
 			potentialConnections.Add(approxPos,c);
 		} else {
+			if (falsePotentialConnections.ContainsKey(approxPos)) {
+				Plugin.LogError($"Two false potential connections at the same position? ({approxPos})");
+				return;
+			}
 			doorways[c.d1] = DoorType.FALSE_POTENTIAL_CONNECTOR;
 			if (doorways.ContainsKey(c.d2)) doorways[c.d2] = DoorType.FALSE_POTENTIAL_CONNECTOR;
 			falsePotentialConnections.Add(approxPos,c);
@@ -196,7 +209,11 @@ public class DoorwayManager : IDoorwayManager {
 		}
 	}
 	
-	private void RemoveAction(Doorway d) => Remove(d);
+	private void RemoveAction(Doorway d) {
+		if (!Remove(d)) {
+			Debug.LogError($"Failed to remove doorway {(d == null ? d : d.name)} from DoorwayManager");
+		}
+	}
 	public bool Remove(Doorway d) {
 		if (!doorways.ContainsKey(d)) return false;
 		Unsubscribe(d);
@@ -384,7 +401,13 @@ public class Doorway : MonoBehaviour {
 	
 	// Properties
 	public Tile Tile {get {
-		return this.tile ??= this.GetComponentInParent<Tile>(includeInactive: true);
+		if (this.tile == null) {
+			this.tile = null; // assert that null actually means null and not destroyed
+			foreach (Tile t in this.GetComponentsInParent<Tile>(this.gameObject.activeInHierarchy)) {
+				if (t.Initialized) { this.tile = t; break; }
+			}
+		}
+		return this.tile;
 	}}
 	public Vector2 Size {get {return this.size;} protected set {this.size = value;}}
 	public bool IsVacant {get {return this.connection == null;}}
@@ -463,7 +486,7 @@ public class Tile : MonoBehaviour {
 	public Doorway[] Doorways {
 		get => this.doorways ??= this.GetComponentsInChildren<Doorway>();
 	}
-	public virtual float IntersectionTolerance {get => 5f/8;}
+	public virtual float IntersectionTolerance => 5f/8;
 	public Bounds LooseBoundingBox {
 		get => new Bounds(BoundingBox.center, BoundingBox.size - 2*IntersectionTolerance*Vector3.one);
 	}
@@ -481,13 +504,13 @@ public class Tile : MonoBehaviour {
 		newtile.bounding_box = new Bounds(Vector3.zero,Vector3.zero);
 		
 		newtile.transform.parent = parent;
-		newtile.Initialize();
+		newtile.Initialize(this);
 		return newtile;
 	}
 	
 	// Do placement-independent initializtion here (including bounds, since bounds are 
 	// affected by MoveTo and RotateBy
-	public virtual void Initialize() {
+	public virtual void Initialize(Tile prefab) {
 		if (initialized) return;
 		initialized = true;
 		return;
@@ -517,7 +540,7 @@ public class Tile : MonoBehaviour {
 		this.MoveTo(parent.position);
 		return true;
 	}
-		
+	
 	public bool Place(int thisDoorwayIdx, Doorway other) {
 		if (thisDoorwayIdx >= this.Doorways.Length) {
 			throw new IndexOutOfRangeException(
@@ -538,11 +561,12 @@ public class Tile : MonoBehaviour {
 		this.transform.parent = other.transform;
 		var thisDoorway = this.Doorways[thisDoorwayIdx];
 		
-		// Undo this rotation, do other rotation, do 180 about vertical axis
+		// Undo this rotation, do other rotation, do 180 about doorway's *local* vertical axis
+		Vector3 up = thisDoorway.transform.up;
 		Quaternion rotation = (
 			Quaternion.Inverse(thisDoorway.transform.rotation) 
 			* other.transform.rotation
-			* new Quaternion(0,1,0,0)
+			* new Quaternion(up.x,up.y,up.z,0)
 		);
 		
 		
@@ -554,12 +578,13 @@ public class Tile : MonoBehaviour {
 		this.MoveTo(
 			other.transform.position - doorLocalPos
 		);
-		if (!this.Map.VerifyTilePlacement(this)) {
+		
+		if (!this.Map.VerifyTilePlacement(new PlacementInfo(this,thisDoorwayIdx,other))) {
 			this.transform.SetParent(oldParent);
 			return false;
 		}
-		
 		thisDoorway.Connect(other);
+		
 		return true;
 	}
 	
@@ -613,6 +638,11 @@ public class PlacementInfo : GenerationAction {
 		this.newDoorwayIdx = newDoorwayIdx;
 		this.attachmentPoint = attachmentPoint;
 	}
+
+	public override string ToString() => (
+		$"PlacementInfo: {newtile.name}:{newtile.Doorways[newDoorwayIdx].name} "
+		+$"onto {attachmentPoint.Tile.name}:{attachmentPoint.name}"
+	);
 }
 
 public class RemovalInfo : GenerationAction {
@@ -693,6 +723,8 @@ public class GameMap : MonoBehaviour {
 		this.navSurface.collectObjects = CollectObjects.Children;
 		this.navSurface.useGeometry = NavMeshCollectGeometry.PhysicsColliders;
 		// ^NavmeshCollectGeometry.RenderMeshes causes the manor start tile to be unenterable/exitable
+		
+		this.TileRemovalEvent += this.RemoveTileAction;
 	}
 	
 	protected virtual void OnDestroy() {
@@ -747,7 +779,8 @@ public class GameMap : MonoBehaviour {
 		}
 	}
 	
-	public virtual bool VerifyTilePlacement(Tile tile) {
+	public virtual bool VerifyTilePlacement(PlacementInfo placement) {
+		Tile tile = placement.NewTile;
 		if (tile == null) {
 			Debug.LogException(new ArgumentNullException("Tile tile"), this);
 			return false;
@@ -767,7 +800,10 @@ public class GameMap : MonoBehaviour {
 			Doorway leaf = placement.AttachmentPoint;
 			int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
 			
-			bool success = newTile.Place(newTileTargetDoorwayIdx,leaf);
+			bool success = (
+				leaf.Fits(newTile.Doorways[newTileTargetDoorwayIdx]) 
+				&& newTile.Place(newTileTargetDoorwayIdx,leaf)
+			);
 			if (!success) {
 				GameObject.Destroy(newTile.gameObject);
 				return null;
@@ -788,11 +824,19 @@ public class GameMap : MonoBehaviour {
 		return newTile;
 	}
 	
-	public virtual void RemoveTile(RemovalInfo removal) {
-		foreach (Tile t in removal.Target.gameObject.GetComponentsInChildren<Tile>()) {
+	private void RemoveTileAction(Tile t) {
+		if (!this.boundsMap.Remove(t)) {
+			Debug.LogError($"Tile {t.name} was not in boundsMap?");
+		}
+	}
+	public void RemoveTile(RemovalInfo removal) {
+		if (removal.Target == null) {
+			Debug.LogError($"Cannot remove tile that has already been destroyed");
+			return;
+		}
+		foreach (Tile t in removal.Target.GetComponentsInChildren<Tile>(this.gameObject.activeInHierarchy)) {
 			this.TileRemovalEvent?.Invoke(t);
 		}
-		this.boundsMap.Remove(removal.Target);
 		GameObject.Destroy(removal.Target.gameObject);
 	}
 	

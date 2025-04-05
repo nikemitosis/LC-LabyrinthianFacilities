@@ -1,5 +1,4 @@
 namespace LabyrinthianFacilities.Patches;
-using DgConversion;
 
 using System;
 using System.Reflection;
@@ -26,6 +25,7 @@ class GenerateLevel {
 	private static int[] Seeds = [1071201032];
 	private static int SeedIndex = 0;
 	#endif
+	public static bool debugForceFlow = true;
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
@@ -55,9 +55,17 @@ class GenerateLevel {
 				return true;
 			}
 			
+			// DEBUG
+			DunGen.Graph.DungeonFlow flo = null;
+			if (debugForceFlow) foreach (var i in RoundManager.Instance.dungeonFlowTypes) {
+				if (i.dungeonFlow.name == "TowerFlow") {
+					flo = i.dungeonFlow;
+				}
+			}
+			
 			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
-				__instance.DungeonFlow,
+				debugForceFlow ? flo : __instance.DungeonFlow,
 				seed
 			);
 			

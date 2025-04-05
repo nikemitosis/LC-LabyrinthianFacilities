@@ -1,4 +1,4 @@
-namespace LabyrinthianFacilities.DgConversion;
+namespace LabyrinthianFacilities;
 
 using BoundsExtensions;
 using Serialization;
@@ -20,6 +20,8 @@ using Random = System.Random;
 
 public class DDoorway : Doorway {
 	// Properties
+	public float VerticalOffset => this.Tile.IntersectionTolerance + 0.125f;
+	public Vector3 PositionOffset => this.transform.up * VerticalOffset;
 	public Prop ActiveRandomObject {
 		get => activeRandomObject;
 		protected set => activeRandomObject=value;
@@ -46,30 +48,14 @@ public class DDoorway : Doorway {
 	protected Prop activeRandomObject = null;
 	
 	// Helper Methods
+	// Round door rotation to nearest 90 degrees
 	private void fixRotation() {
-		Bounds bounds = Tile.BoundingBox;
-		RectFace[] faces = bounds.GetFaces();
-		
-		// float lowest_dist = faces[0].bounds.SqrDistance(this.transform.position);
-		// highest w component is highest cosine of 1/2*angle, which means lowest angle
-		// (the angle is how much the door has to rotate to face whatever face)
-		
-		float lowest_dist = Vector3.Angle(
-			faces[0].perpindicular, this.transform.rotation * Vector3.forward
-		);
-		RectFace closest_face = faces[0];
-		
-		for (uint i=1; i<6; i++) {
-			float dist = (
-				faces[i].perpindicular - this.transform.rotation * Vector3.forward
-			).magnitude;
-			if (dist < lowest_dist) {
-				lowest_dist = dist;
-				closest_face = faces[i];
-			}
-		}
-		
-		this.transform.rotation = Quaternion.LookRotation(closest_face.perpindicular);
+		Vector3 old = this.transform.rotation.eulerAngles;
+		this.transform.rotation = Quaternion.Euler(new Vector3(
+			(int)(old.x+0.5f),
+			(int)(old.y+0.5f),
+			(int)(old.z+0.5f)
+		));
 	}
 	
 	private Prop instantiateSubPart(GameObject o, bool isblocker) {
@@ -79,7 +65,7 @@ public class DDoorway : Doorway {
 		if (o.GetComponentInParent<Tile>(includeInactive: true) != this.Tile) {
 			o = GameObject.Instantiate(o);
 			o.transform.SetParent(this.transform);
-			o.transform.localPosition = Vector3.zero;
+			o.transform.localPosition = -this.PositionOffset;
 			o.transform.localRotation = Quaternion.identity;
 		}
 		
@@ -119,6 +105,8 @@ public class DDoorway : Doorway {
 				$"DDoorway has no parent tile. "
 			);
 		}
+		// make sure doorway's position is not on edge of bounding box (as opposed to just on a face)
+		this.transform.position += PositionOffset;
 		
 		var dg = this.GetComponent<DunGen.Doorway>();
 		
@@ -162,6 +150,23 @@ public class DDoorway : Doorway {
 	}
 	
 	// Native Methods
+	protected bool CheckDunGenRule(DunGen.TileConnectionRule rule, DDoorway other) {
+		return rule.Delegate?.Invoke(
+			this.Tile.GetComponent<DunGen.Tile>(),
+			other.Tile.GetComponent<DunGen.Tile>(),
+			this.GetComponent<DunGen.Doorway>(),
+			other.GetComponent<DunGen.Doorway>()
+		) != DunGen.TileConnectionRule.ConnectionResult.Deny;
+	}
+	public override bool Fits(Doorway o) {
+		if (!(o is DDoorway other)) return false;
+		if (!base.Fits(other)) return false;
+		foreach (var rule in DunGen.DoorwayPairFinder.CustomConnectionRules) {
+			if (!CheckDunGenRule(rule,other)) return false;
+		}
+		return true;
+	}
+	
 	protected virtual void OnConnect() {
 		foreach (Prop obj in this.alwaysBlockers) {
 			obj.Disable();
@@ -272,6 +277,7 @@ public class Prop : MonoBehaviour {
 	public bool IsDoorProp => IsBlocker || IsConnector;
 	public DTile Tile => this.GetComponentInParent<DTile>(this.gameObject.activeInHierarchy);
 	public DDoorway Doorway => this.GetComponentInParent<DDoorway>(this.gameObject.activeInHierarchy);
+	public DGameMap Map => this.GetComponentInParent<DGameMap>(this.gameObject.activeInHierarchy);
 	public MonoBehaviour Parent => IsDoorProp ? Doorway : Tile;
 	
 	public void SetActive(bool value) {if (value) Enable(); else Disable();}
@@ -294,10 +300,13 @@ public class Prop : MonoBehaviour {
 	
 	protected virtual void OnDestroy() {
 		if (IsDoorProp) {
-			this.Doorway.RemoveProp(this);
-		} else {
-			this.Tile.RemoveProp(this);
-		}
+			var d = this.Doorway;
+			if (d != null) d.RemoveProp(this);
+		} 
+		var t = this.Tile;
+		if (t != null) t.RemoveProp(this);
+		var map = this.Map;
+		if (map != null) map.RemoveProp(this);
 	}
 }
 
@@ -317,6 +326,7 @@ public class PropSet : WeightedList<Prop> {
 	}
 	
 	public override bool Add(Prop p, float weight) {
+		if (p == null) return false;
 		if (this.Remove(p,out float oldWeight)) {
 			return this.Add(p,weight + oldWeight);
 		} else {
@@ -327,18 +337,20 @@ public class PropSet : WeightedList<Prop> {
 
 public class DTile : Tile {
 	// Properties
-	internal IList<PropSet> LocalPropSets {get {return localPropSets.AsReadOnly();}}
-	internal IList<(Prop prop, int id, float weight)> GlobalProps {get {return globalProps.AsReadOnly();}}
+	internal IList<PropSet> LocalPropSets => (
+		(IList<PropSet>)localPropSets?.AsReadOnly() ?? (IList<PropSet>)new PropSet[0]
+	);
+	internal IList<(Prop prop, int id, float weight)> GlobalProps => (
+		(IList<(Prop prop, int id, float weight)>)globalProps?.AsReadOnly() 
+		?? (IList<(Prop prop, int id, float weight)>)new (Prop prop, int id, float weight)[0]
+	);
+	
+	// Public
+	public List<Func<bool,PlacementInfo>> ValidatePlacement;
 	
 	// Protected/Private
 	protected List<PropSet> localPropSets;
 	protected List<(Prop prop, int id, float weight)> globalProps;
-	
-	private void OnDestroy() {
-		if (this.Map != null) {
-			((DGameMap)this.Map).RemoveTileProps(this);
-		}
-	}
 	
 	// Helper Methods
 	private Bounds DeriveBounds() {
@@ -355,40 +367,144 @@ public class DTile : Tile {
 			throw new InvalidOperationException($"Tile {this.name} is not active; cannot derive bounds");
 		}
 		
-		bounds = new Bounds(Vector3.zero,Vector3.zero);
-		// manor tiles all use mesh
-		// factory (typically) uses variety of these 3 (belt room is weird af)
-		Collider collider = (
-			this.transform.Find("mesh") 
-			?? this.transform.Find("Mesh") 
-			?? this.transform.Find("Wall") 
-		)?.GetComponent<MeshCollider>();
+		bounds = new Bounds(this.transform.position,Vector3.zero);
 		
-		if (collider == null) {
-			#if VERBOSE_TILE_INIT
-			Plugin.LogDebug($"Unable to find easy meshcollider for {this}");
-			#endif
-			
-			var colliders = this.transform.Find("Meshes")?.GetComponentsInChildren<MeshCollider>(true);
-			foreach (Collider c in colliders ?? (Collider[])[]) {
-				bounds.Encapsulate(c.bounds);
-			}
-			
+		var renders = this.GetComponentsInChildren<Renderer>();
+		foreach (Renderer r in renders ?? (Renderer[])[]) {
 			if (bounds.extents == Vector3.zero) {
-				// cave tiles all have first meshcollider as room bounds (I think)
-				collider = (
-					this.GetComponentInChildren<MeshCollider>(true)
-					?? this.GetComponentInChildren<Collider>(true)
-				);
-				#if VERBOSE_TILE_INIT
-				Plugin.LogDebug($"Using first collider found: {collider}");
-				#endif
-				if (collider == null) {
-					Plugin.LogError($"Could not find a collider to infer bounds for tile {this}");
+				bounds = r.bounds;
+			} else {
+				bounds.Encapsulate(r.bounds);
+			}
+		}
+		if (bounds.extents == Vector3.zero) {
+			var colliders = this.GetComponentsInChildren<Collider>();
+			foreach (Collider c in colliders ?? (Collider[])[]) {
+				if (bounds.extents == Vector3.zero) {
+					bounds = c.bounds;
+				} else {
+					bounds.Encapsulate(c.bounds);
 				}
 			}
 		}
-		if (bounds.extents == Vector3.zero && collider != null) bounds = collider.bounds;
+		// The (horizontal) doorways should form a rectangle because of DunGen's rules with doors 
+		// (Doorways must be on AABB) (also we are ignoring the y axis)
+		// Constrain bounding box until all doors lay on it
+		
+		// !! THIS IGNORES THE FACT THAT SOME DOORS ARE VERTICAL !!
+		// 1. Find smallest rectangle containing all doors
+		// 2. Change bounds s.t. one edge runs along the corresponding edge in the rectangle formed by the doors
+		//    Choose the edge(s) that require the least change in perimeter of the bounds
+		// 3. Repeat until all doors are on the edge of the bounding box
+		//    (this should only take two iterations, since there are only two dimensions to control)
+		Vector2 min = new Vector2(Single.PositiveInfinity,Single.PositiveInfinity);
+		Vector2 max = new Vector2(Single.NegativeInfinity,Single.NegativeInfinity);
+		foreach (Doorway d in this.Doorways) {
+			// ignore ceiling/floor doors. Yes this will probably become an issue
+			if (d.transform.up != Vector3.up) continue; 
+			Vector3 pos = d.transform.position;
+			
+			if (pos.x < min.x) min.x = pos.x;
+			if (pos.x > max.x) max.x = pos.x;
+			if (pos.z < min.y) min.y = pos.z;
+			if (pos.z > max.y) max.y = pos.z;
+		}
+		int attemptCtr = 0;
+		do {
+			bool done = true;
+			foreach (Doorway d in this.Doorways) {
+				if (d.transform.up != Vector3.up) continue;
+				Vector3 pos = d.transform.position;
+				if (bounds.ClosestFace(pos).bounds.SqrDistance(pos) > 0.0625f) {done = false; break;}
+			}
+			if (done) break;
+			
+			float dminx = Math.Abs(bounds.min.x - min.x);
+			float dmaxx = Math.Abs(bounds.max.x - max.x);
+			float dminz = Math.Abs(bounds.min.z - min.y);
+			float dmaxz = Math.Abs(bounds.max.z - max.y);
+			
+			if (
+				dminx != 0
+				&& dminx < dmaxx
+				&& dminx < dminz
+				&& dminx < dmaxz
+			) {
+				bounds.min = new Vector3(min.x,bounds.min.y,bounds.min.z);
+			} else if (
+				dmaxx != 0
+				&& dmaxx < dminz
+				&& dmaxx < dmaxz
+			) {
+				bounds.max = new Vector3(max.x,bounds.max.y,bounds.max.z);
+			} else if (
+				dminz != 0
+				&& dminz < dmaxz
+			) {
+				bounds.min = new Vector3(bounds.min.x,bounds.min.y,min.y);
+			} else if (
+				dmaxz != 0
+			) {
+				bounds.max = new Vector3(bounds.max.x,bounds.max.y,max.y);
+			} else {
+				Plugin.LogWarning($"No non-zero change in bounds to accomodate doors?");
+			}
+			
+			if (++attemptCtr > 10) break;
+		} while (true);
+		
+		/* foreach (Doorway d in this.Doorways) {
+			// if the doorway is completely within the bounds, 
+			// shrink the bounds whichever way requires the least change
+			float x = d.transform.position.x;
+			float z = d.transform.position.z;
+			
+			// filter out doorways that aren't in trouble
+			// "in trouble" means engulfed by tile bounds
+			if (!(x > bounds.min.x && x < bounds.max.x && z > bounds.min.z && z < bounds.max.z)) continue;
+			
+			// choose dimension to change based on door's direction
+			byte mode=0;
+			float yrot = d.transform.rotation.eulerAngles.y;
+			float diff = 0 - yrot;
+			if (diff < 0) diff += 360;
+			if (diff > 180) diff = 360-diff;
+			
+			float difftemp = 90 - yrot;
+			if (difftemp < 0) difftemp += 360;
+			if (difftemp > 180) difftemp = 360-difftemp;
+			if (difftemp < diff) {
+				mode = 1;
+				diff = difftemp;
+			}
+			difftemp = 180 - yrot;
+			if (difftemp < 0) difftemp += 360;
+			if (difftemp > 180) difftemp = 360-difftemp;
+			if (difftemp < diff) {
+				mode = 2;
+				diff = difftemp;
+			}
+			difftemp = 270 - yrot;
+			if (difftemp < 0) difftemp += 360;
+			if (difftemp > 180) difftemp = 360-difftemp;
+			if (difftemp < diff) {
+				mode = 3;
+				diff = difftemp;
+			}
+			switch (mode) {
+				case 0:
+					bounds.max = new Vector3(bounds.max.x,bounds.max.y,z);
+				break; case 1:
+					bounds.max = new Vector3(x,bounds.max.y,bounds.max.z);
+				break; case 2:
+					bounds.min = new Vector3(bounds.min.x,bounds.min.y,z);
+				break; case 3:
+					bounds.min = new Vector3(x,bounds.min.y,bounds.min.z);
+				break; default:
+					throw new NotImplementedException("Invalid case - how did we get here?");
+				// break;
+			}
+		} */
 		
 		// Special rules
 		switch (this.gameObject.name) {
@@ -399,10 +515,9 @@ public class DTile : Tile {
 					this.transform.Find("VisualMesh").Find("StartRoomElevator")
 						.GetComponent<MeshFilter>().sharedMesh.bounds
 				);
-			break; case "MineshaftStartTile(Clone)":
-				// Do not include the entire start room
-				// (makes bounds at bottom of elevator stick out way too far)
-				bounds = new Bounds(new Vector3(3.4f,20f,3.4f), new Vector3(6.8f,60f,6.8f));
+			break; case "DoubleDoorRoom(Clone)":
+				// copy Mesh (1) MeshRenderer bounds
+				bounds = new Bounds(new Vector3(7.12f,-2.94f,19.88f),new Vector3(9.13f,2.69f,14.25f));
 			break; default:
 				if (bounds.extents == Vector3.zero) {
 					Plugin.LogError($"Tile {this} has zero bounds");
@@ -412,16 +527,23 @@ public class DTile : Tile {
 		}
 		
 		#if VERBOSE_TILE_INIT
-		Plugin.LogDebug($"{this.gameObject.name} extents: {bounds.extents}");
+		Plugin.LogDebug($"{this.name} extents: {bounds.extents}");
 		#endif
 		
 		return bounds;
 	}
 	
-	public override void Initialize() {
+	public override void Initialize(Tile prefab) {
 		if (this.Initialized) return;
-		base.Initialize();
+		base.Initialize(prefab);
 		this.Initialized = true;
+		
+		// Do not allow nested tiles
+		foreach (Tile t in this.GetComponentsInChildren<Tile>(true)) {
+			if (t != this) {
+				UnityEngine.Object.Destroy(t);
+			}
+		}
 		
 		// Bounds
 		#if VERBOSE_TILE_INIT
@@ -509,13 +631,19 @@ public class DTile : Tile {
 
 public class DGameMap : GameMap {
 	
+	public delegate bool TilePlacementVerifier(
+		DTile newTile, DTile oldTile, DDoorway newDoorway, DDoorway oldDoorway
+	);
+	public event TilePlacementVerifier TilePlacementVerifiers;
+	
 	protected Dictionary<int, PropSet> globalPropSets;
 	protected Dictionary<int, PropSet> uninitializedGlobalPropSets;
 	
 	internal List<GameObject> CaveLights = new();
 	
-	public Moon Moon {get {return this.transform.parent.GetComponent<Moon>();}}
-	public IReadOnlyCollection<PropSet> GlobalPropSets {get {return globalPropSets.Values;}}
+	// Properties
+	public Moon Moon => this.transform.parent.GetComponent<Moon>();
+	public IReadOnlyCollection<PropSet> GlobalPropSets => globalPropSets.Values;
 	
 	// Constructors/Initialization
 	protected override void Awake() {
@@ -524,6 +652,7 @@ public class DGameMap : GameMap {
 		this.transform.position = new Vector3(0,-200,0);
 		
 		this.GenerationCompleteEvent += DGameMap.GenerationCompleteHandler;
+		this.TileRemovalEvent += this.RemoveTileAction;
 		globalPropSets = new();
 		uninitializedGlobalPropSets = new();
 	}
@@ -548,22 +677,29 @@ public class DGameMap : GameMap {
 	
 	public override Tile AddTile(PlacementInfo placement) {
 		Tile tile = base.AddTile(placement);
-		if (tile != null) this.AddGlobalProps((DTile)tile);
+		if (tile != null) {
+			this.AddGlobalProps((DTile)tile);
+		}
 		return tile;
 	}
 	
 	public void RemoveTileProps(DTile tile) {
+		if (tile.GlobalProps == null) return;
 		foreach ((Prop prop,int id,float weight) in tile.GlobalProps) {
 			if (!globalPropSets.TryGetValue(id, out PropSet pset)) {
 				if (!uninitializedGlobalPropSets.TryGetValue(id, out pset)) {
-					// Some propsets might not be recognized because the tile was never actually placed, 
-					// and so never had its props registered
-					// throw new KeyNotFoundException($"GlobalPropId {id}");
 					continue;
 				}
 			}
 			pset.Remove(prop);
 		}
+	}
+	public bool RemoveProp(Prop p) {
+		bool rt = false;
+		foreach (PropSet ps in globalPropSets.Values.Concat(uninitializedGlobalPropSets.Values)) {
+			rt = rt || ps.Remove(p);
+		}
+		return rt;
 	}
 	
 	public void InitializeGlobalPropSets(DungeonFlowConverter flowConverter) {
@@ -619,6 +755,27 @@ public class DGameMap : GameMap {
 		}
 		return true;
 	}
+	
+	public override bool VerifyTilePlacement(PlacementInfo placement) {
+		if (!base.VerifyTilePlacement(placement)) return false;
+		
+		if (TilePlacementVerifiers == null) return true;
+		
+		DTile    thisTile     = (DTile   )placement.NewTile;
+		DDoorway thisDoorway  = (DDoorway)thisTile.Doorways[placement.NewDoorwayIdx];
+		DDoorway otherDoorway = (DDoorway)placement.AttachmentPoint;
+		DTile    otherTile    = (DTile   )otherDoorway.Tile;
+		
+		foreach (TilePlacementVerifier verifier in TilePlacementVerifiers.GetInvocationList()) {
+			if (!verifier(thisTile,otherTile,thisDoorway,otherDoorway)) {
+				return false;
+			}
+		}
+		
+		return true;
+	}
+	
+	private void RemoveTileAction(Tile t) => RemoveTileProps((DTile)t);
 }
 
 public sealed class DGameMapSerializer : GameMapSerializer<DGameMap, DTile> {

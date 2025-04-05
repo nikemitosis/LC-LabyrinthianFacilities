@@ -142,14 +142,14 @@ public class WeightedList<T> : IEnumerable<T>, ICollection<T> {
 		}
 	}
 	
-	public float SummedWeight {get {return summedWeight;}}
+	public float SummedWeight => summedWeight;
 	
 	protected List<T> items;
 	protected List<float> weights;
 	protected float summedWeight;
 	
-	public int Count {get => items.Count;}
-	public virtual bool IsReadOnly {get => false;}
+	public int Count => items.Count;
+	public virtual bool IsReadOnly => false;
 	
 	public virtual IEnumerable<Entry> Entries {get {
 		for (int i=0; i<items.Count; i++) {

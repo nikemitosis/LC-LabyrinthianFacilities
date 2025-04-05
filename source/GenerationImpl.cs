@@ -1,4 +1,4 @@
-namespace LabyrinthianFacilities.DgConversion;
+namespace LabyrinthianFacilities;
 
 using System;
 using System.Collections.Generic;
@@ -62,10 +62,10 @@ internal sealed class ArchetypeRegionPlacer : IDisposable {
 		Archetype archetype, 
 		HashSet<DTile> tilesPlaced
 	) {
-		if (parent == null) throw new ArgumentNullException("parent");
-		if (map == null) throw new ArgumentNullException("map");
-		if (root == null) throw new ArgumentNullException("root");
-		if (archetype == null) throw new ArgumentNullException("archetype");
+		if (parent      == null) throw new ArgumentNullException("parent"     );
+		if (map         == null) throw new ArgumentNullException("map"        );
+		if (root        == null) throw new ArgumentNullException("root"       );
+		if (archetype   == null) throw new ArgumentNullException("archetype"  );
 		if (tilesPlaced == null) throw new ArgumentNullException("tilesPlaced");
 		
 		this.parent = parent;
@@ -104,7 +104,9 @@ internal sealed class ArchetypeRegionPlacer : IDisposable {
 		}
 		if (leaf == null) throw new Exception("null leaf with no exhaustion?");
 		
-		return new PlacementInfo(tile,Array.IndexOf(tile.Doorways,doorway),leaf);
+		var rt = new PlacementInfo(tile,Array.IndexOf(tile.Doorways,doorway),leaf);
+		if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Trying {rt}");
+		return rt;
 	}
 	
 	private void Handler(Tile t) {
@@ -123,6 +125,7 @@ internal sealed class ArchetypeRegionPlacer : IDisposable {
 			iterationsSinceLastSuccess = 0;
 			
 		} else {
+			if (Config.Singleton.EnableVerboseGeneration) Plugin.LogDebug($"Placement Failed");
 			iterationsSinceLastSuccess++;
 		}
 	}
@@ -254,14 +257,7 @@ public class DungeonFlowConverter : ITileGenerator {
 		foreach (var n in flow.Nodes) {
 			if (n.NodeType == DunGen.Graph.NodeType.Start) {node = n; break;}
 		}
-		this.StartRoom = (node
-			?.TileSets[0]
-			?.TileWeights
-			?.Weights[0]
-			?.Value
-			?.GetComponent<DTile>()
-		);
-		
+		FindStartRoom(node);
 		
 		int baseTileCount = (int)(
 			(
@@ -322,6 +318,34 @@ public class DungeonFlowConverter : ITileGenerator {
 				this.archetypes[i][j].Length /= summedLength;
 			}
 		}
+	}
+	
+	private void FindStartRoom(DunGen.Graph.GraphNode node) {
+		foreach (var tileset in node.TileSets) {
+			foreach (var gameObjectChance in tileset.TileWeights.Weights) {
+				foreach (
+					SpawnSyncedObject subObject 
+					in gameObjectChance.Value.GetComponentsInChildren<SpawnSyncedObject>(true)
+				) {
+					if (subObject.spawnPrefab.GetComponent<EntranceTeleport>()?.name == "EntranceTeleportA") {
+						this.StartRoom = gameObjectChance.Value.GetComponent<DTile>();
+						return;
+					}
+				}
+				
+			}
+		}
+		
+		Plugin.LogError(
+			$"Could not find a start room with an EntranceTeleportA. Defaulting to first tile we find."
+		);
+		this.StartRoom = (node
+			?.TileSets[0]
+			?.TileWeights
+			?.Weights[0]
+			?.Value
+			?.GetComponent<DTile>()
+		);
 	}
 	
 	public virtual (int min,int max) GetGlobalPropRange(int id) {
@@ -447,7 +471,7 @@ public class DungeonFlowConverter : ITileGenerator {
 						);
 					}
 				} else {
-					if (attempt == null || arp.iterationsSinceLastSuccess >= 30) {
+					if (attempt == null /* || arp.iterationsSinceLastSuccess >= 30 */) {
 						if (progress < 0.7f*length) {
 							if (Config.Singleton.EnableVerboseGeneration) {
 								Plugin.LogDebug(
@@ -740,14 +764,21 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	private IEnumerable<PropAction> HandlePropSetPos(PropSet propset) {
+		if (propset == null) {
+			Plugin.LogException(new ArgumentNullException($"propset"));
+			yield break;
+		}
 		WeightedList<Prop> copy = new();
 		int numActive = 0;
 		int numEnable = Rng.Next(propset.Range.min,propset.Range.max+1);
 		if (numEnable > propset.Count) numEnable = propset.Count;
-		
 		foreach ((Prop prop,float weight) in propset.Entries) {
-			if (prop.gameObject.activeSelf) numActive++;
-			else if (!prop.IsDoorProp) copy.Add(prop,weight);
+			if (prop == null && !ReferenceEquals(prop,null)) {
+				Plugin.LogError($"Destroyed prop in propset");
+			} else {
+				if (prop.gameObject.activeSelf) numActive++;
+				else if (!prop.IsDoorProp) copy.Add(prop,weight);
+			}
 		}
 		for (int i=numActive; i<numEnable; i++) {
 			Prop tgt;
@@ -765,15 +796,23 @@ public class DungeonFlowConverter : ITileGenerator {
 	}
 	
 	private IEnumerable<PropAction> HandlePropSetNeg(PropSet propset, bool globalPropSet=false) {
+		if (propset == null) {
+			Plugin.LogException(new ArgumentNullException($"propset"));
+			yield break;
+		}
 		WeightedList<Prop> copy = new();
 		int numActive = 0;
 		int numEnable = propset.Range.max;
 		if (numEnable > propset.Count) numEnable = propset.Count;
 		
 		foreach ((Prop prop,float weight) in propset.Entries) {
-			if (prop.gameObject.activeInHierarchy) {
-				numActive++;
-				copy.Add(prop,weight);
+			if (prop == null && !ReferenceEquals(prop,null)) {
+				Plugin.LogError($"Destroyed prop in propset");
+			} else {
+				if (prop.gameObject.activeInHierarchy) {
+					numActive++;
+					copy.Add(prop,weight);
+				}
 			}
 		}
 		for (int i=numActive; i>numEnable; i--) {

@@ -11,7 +11,7 @@
 			https://nuget.samboy.dev/v3/index.json
 		</RestoreAdditionalProjectSources>
 		<RootNamespace>LabyrinthianFacilities</RootNamespace>
-		<DefineConstants><!-- SeedOverride --></DefineConstants>
+		<DefineConstants><!-- VERBOSE_TILE_INIT --><!-- SeedOverride --></DefineConstants>
 	</PropertyGroup>
 
 	<ItemGroup>

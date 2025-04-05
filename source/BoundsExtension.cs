@@ -7,7 +7,7 @@ using System.Collections.Generic;
 using UnityEngine;
 
 // Axis-aligned rectangle in 3d-space
-struct RectFace {
+public struct RectFace {
 	private int zeroIdx;
 	private Bounds _bounds;
 	private bool negative=false;
@@ -34,7 +34,10 @@ struct RectFace {
 				break;
 			}
 		} if (forElse) {
-			throw new ArgumentException("RectFace must have zero width in at least one dimension");
+			throw new ArgumentException(
+				"RectFace must have zero width in at least one dimension\n"
+				+$"(passed min: {min}, max: {max} => size: {size}"
+			);
 		}
 		
 		this._bounds = new Bounds(0.5f*(min+max),max-min);
@@ -49,9 +52,11 @@ struct RectFace {
 		}
 		return false;
 	}
+	
+	public override string ToString() => $"{this.bounds}";
 }
 
-static class BoundsExtension {
+public static class BoundsExtension {
 	public static void FixExtents(this ref Bounds ths) {
 		Vector3 ext = ths.extents;
 		for (int i=0; i<3; i++) {
@@ -64,7 +69,7 @@ static class BoundsExtension {
 	// Faces' perpindicular property all point *outside* the bounding box
 	public static RectFace[] GetFaces(this Bounds ths) {
 		RectFace[] rt = new RectFace[6];
-		Vector3 a = ths.center + ths.extents;
+		Vector3 a = ths.max;
 		rt[0] = new RectFace( //+x
 			a, ths.center + Vector3.Scale(ths.extents,new Vector3( 1,-1,-1))
 		);
@@ -74,7 +79,7 @@ static class BoundsExtension {
 		rt[2] = new RectFace( //+z
 			a, ths.center + Vector3.Scale(ths.extents,new Vector3(-1,-1, 1))
 		);
-		a = ths.center - ths.extents;
+		a = ths.min;
 		rt[3] = new RectFace( //-x
 			a, ths.center + Vector3.Scale(ths.extents,new Vector3(-1, 1, 1)), true
 		);

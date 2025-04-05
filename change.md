@@ -1,14 +1,20 @@
-# v0.6.3
+# v0.7.0
 
 ## Bugfixes
- - #41 Fixed an issue with set-seed runs not acting consistent if you played two runs back-to-back or with a game restart between days of a run. 
+ - #42 
+ - Major changes generation to be compatible with [GenericInteriors](https://thunderstore.io/c/lethal-company/p/Generic_GMD/Generic_Interiors/)
+   - Changed how tiles derive their bounds to be more generic (hehe)
+   - Changed how doors have their rotation tweaked
+   - Added support for vertical doorways
+   - Implemented usage of `TileConnectionRule` for `DTile`
+ - Fixed a bug where nested tiles would break map generation
 
-## Tweaks
- - Changed config setting `Debug.History` to be enabled by default
+## Known Incompatibilities
+### Major (Plugin will not load to avoid serious issues)
+ - PathFindingLib/PathFindingLagFix
+   - Causes crashes
+### Minor (Plugin will still load, but you may encounter some bugs)
+ - NeedyCats
+   - Cat positions in interiors desync on save load
 
-## Technical
- - Added `Parent`, `Tile`, and `DDoorway` properties to `Prop` to access a prop's tile/doorway
-   - `Parent` is the general version that just returns `Tile` or `Doorway` depending on whether it's a door prop
- - Changed `DTile` and `DDoorway` to use `List`s to store props instead of arrays (in case I want to remove props later)
-   - Added `RemoveProp` methods to `DTile` and `DDoorway`
- - Added a constructor for `WeightedList` to set an initial capacity
+Other custom interiors may or may not be broken, I haven't checked yet. 
