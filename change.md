@@ -1,10 +1,14 @@
+# v0.7.1
+
+## Bugfixes
+ - Disabled `debugForceFlow`
+
 # v0.7.0
 
 ## Bugfixes
- - #42 
  - Major changes generation to be compatible with [GenericInteriors](https://thunderstore.io/c/lethal-company/p/Generic_GMD/Generic_Interiors/)
-   - Changed how tiles derive their bounds to be more generic (hehe)
-   - Changed how doors have their rotation tweaked
+   - #42 Changed how tiles derive their bounds to be more generic (hehe)
+   - Changed how doors have their rotation corrected
    - Added support for vertical doorways
    - Implemented usage of `TileConnectionRule` for `DTile`
  - Fixed a bug where nested tiles would break map generation

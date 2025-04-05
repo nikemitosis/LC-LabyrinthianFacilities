@@ -56,16 +56,16 @@ class GenerateLevel {
 			}
 			
 			// DEBUG
-			DunGen.Graph.DungeonFlow flo = null;
+			/* DunGen.Graph.DungeonFlow flo = null;
 			if (debugForceFlow) foreach (var i in RoundManager.Instance.dungeonFlowTypes) {
 				if (i.dungeonFlow.name == "TowerFlow") {
 					flo = i.dungeonFlow;
 				}
-			}
+			} */
 			
 			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
-				debugForceFlow ? flo : __instance.DungeonFlow,
+				/* debugForceFlow ? flo :  */__instance.DungeonFlow,
 				seed
 			);
 			
