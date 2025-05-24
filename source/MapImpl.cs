@@ -675,12 +675,13 @@ public class DGameMap : GameMap {
 		}
 	}
 	
-	public override Tile AddTile(PlacementInfo placement) {
-		Tile tile = base.AddTile(placement);
-		if (tile != null) {
-			this.AddGlobalProps((DTile)tile);
+	public override Result<Tile,string> AddTile(PlacementInfo placement) {
+		var result = base.AddTile(placement);
+		if (result.isOk) {
+			DTile tile = (DTile)result.Ok;
+			this.AddGlobalProps(tile);
 		}
-		return tile;
+		return result;
 	}
 	
 	public void RemoveTileProps(DTile tile) {

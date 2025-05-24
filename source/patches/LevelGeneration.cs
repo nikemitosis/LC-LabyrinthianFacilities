@@ -25,7 +25,8 @@ class GenerateLevel {
 	private static int[] Seeds = [1071201032];
 	private static int SeedIndex = 0;
 	#endif
-	public static bool debugForceFlow = true;
+	public static bool debugForceFlow = false;
+	public static string debugForceFlowTarget = "StorageComplex";
 	
 	[HarmonyPatch("Generate")]
 	[HarmonyPrefix]
@@ -49,23 +50,30 @@ class GenerateLevel {
 			SeedIndex %= Seeds.Length;
 			#endif
 			
+			// DEBUG
+			DunGen.Graph.DungeonFlow flo = null;
+			if (debugForceFlow) foreach (var i in RoundManager.Instance.dungeonFlowTypes) {
+				if (i.dungeonFlow.name == debugForceFlowTarget) {
+					flo = i.dungeonFlow;
+				}
+			} else {
+                flo = __instance.DungeonFlow;
+            }
+            
 			__instance.Seed = seed;
-			if (!Config.Singleton.UseCustomGeneration) {
+			if (
+                !Config.Singleton.UseCustomGeneration 
+                || flo == null
+                || Config.Singleton.BlacklistedInteriors.Contains(flo.name)
+            ) {
+                if (flo == null) Plugin.LogError($"No DungeonFlow found/provided. Cannot use custom generation");
 				MapHandler.Instance.ChangeActiveMoon(StartOfRound.Instance.currentLevel);
 				return true;
 			}
 			
-			// DEBUG
-			/* DunGen.Graph.DungeonFlow flo = null;
-			if (debugForceFlow) foreach (var i in RoundManager.Instance.dungeonFlowTypes) {
-				if (i.dungeonFlow.name == "TowerFlow") {
-					flo = i.dungeonFlow;
-				}
-			} */
-			
 			Plugin.LogInfo($"Custom Generate! (Seed={seed})");
 			var flow = new DungeonFlowConverter(
-				/* debugForceFlow ? flo :  */__instance.DungeonFlow,
+				debugForceFlow ? flo : __instance.DungeonFlow,
 				seed
 			);
 			

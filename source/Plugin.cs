@@ -34,7 +34,7 @@ using LogLevel = BepInEx.Logging.LogLevel;
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
 	public const string NAME = "LabyrinthianFacilities";
-	public const string VERSION = "0.7.1";
+	public const string VERSION = "0.7.2";
 	
 	private readonly Harmony harmony = new Harmony(GUID);
 	private static new ManualLogSource Logger;

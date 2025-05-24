@@ -47,6 +47,7 @@ public class Config {
 	private ConfigEntry<float> m_MaximumTileMultiplier;
 	private ConfigEntry<float> m_LowerIterationMultiplier;
 	private ConfigEntry<float> m_UpperIterationMultiplier;
+    private ConfigEntry<string> m_BlacklistedInteriors;
 	
 	// Features.EasterEggs
 	private ConfigEntry<bool> m_BouncyCruisers;
@@ -90,6 +91,14 @@ public class Config {
 	public float MaximumTileMultiplier       {get; set;}
 	public float LowerIterationMultiplier    {get; set;}
 	public float UpperIterationMultiplier    {get; set;}
+    private string p_blacklistedInteriorsString;
+    public string BlacklistedInteriorsString {
+        get => p_blacklistedInteriorsString; 
+        set {
+            BlacklistedInteriors = GetBlacklistedInteriors();
+            p_blacklistedInteriorsString = value;
+        }
+    }
 	
 	public bool BouncyCruisers               {get; set;}
 	public bool ForbiddenPassages            {get; set;}
@@ -104,6 +113,8 @@ public class Config {
 	public bool UseSetSeed                   {get; set;}
 	public int  Seed                         {get; set;}
 	public bool IncrementSetSeed             {get; set;}
+    
+    public HashSet<string> BlacklistedInteriors {get; private set;}
 	
 	public Config() {
 		if (singleton != null) throw new InvalidOperationException("Singleton violation");
@@ -244,6 +255,12 @@ public class Config {
 			1.5f,
 			"Multiplier for the maximum amount of tiles to generate in a single day. Multiplies by the the result of *Minimum*TileMultiplier's multiplication. (Requires UseCustomGeneration)"
 		);
+        m_BlacklistedInteriors = Config.Bind(
+            section,
+            "BlacklistedInteriors",
+            "",
+            "Comma separated list of the names of dungeon flows that should not use custom interior generation. This is typically reserved for interiors that do not generate correctly. See LethalLevelLoader's config for the names of dungeon flows. Case Sensitive. "
+        );
 		
 		section = "Features.EasterEggs";
 		m_BouncyCruisers = Config.Bind(
@@ -355,7 +372,29 @@ public class Config {
 		UseSetSeed                   = m_UseSetSeed                  .Value;
 		Seed                         = m_Seed                        .Value;
 		IncrementSetSeed             = m_IncrementSetSeed            .Value;
+        BlacklistedInteriorsString   = m_BlacklistedInteriors        .Value;
 	}
+    
+    private HashSet<string> GetBlacklistedInteriors() {
+        var rt = new HashSet<string>();
+        string stringList = BlacklistedInteriorsString;
+        int startIdx = 0;
+        for (int i=0; i<stringList.Length; i++) {
+            if (stringList[i] == ',') {
+                BlacklistedInteriors.Add(
+                    stringList.Substring(startIdx, startIdx-i).Trim()
+                );
+                startIdx = i+1;
+            }
+        }
+        if (startIdx != stringList.Length) {
+            BlacklistedInteriors.Add(
+                stringList.Substring(startIdx).Trim()
+            );
+        }
+        
+        return rt;
+    }
 }
 
 public class ConfigNetworkSerializer<T> : Serializer<T> where T : Config {
@@ -387,6 +426,7 @@ public class ConfigNetworkSerializer<T> : Serializer<T> where T : Config {
 	 * float LowerIterationMultiplier
 	 * float UpperIterationMultiplier
 	 * int   Seed
+	 * string BlacklistedInteriors
 	 *     
 	 * Note that these config options are *not* sent to clients, because they don't matter to keeping 
 	 *  server/client synced
@@ -428,6 +468,7 @@ public class ConfigNetworkSerializer<T> : Serializer<T> where T : Config {
 		sc.Add(tgt.LowerIterationMultiplier);
 		sc.Add(tgt.UpperIterationMultiplier);
 		sc.Add(tgt.Seed);
+        sc.Add(tgt.BlacklistedInteriorsString); sc.Add((byte)0);
 	}
 	
 	protected override T Deserialize(T rt, DeserializationContext dc) {
@@ -459,7 +500,11 @@ public class ConfigNetworkSerializer<T> : Serializer<T> where T : Config {
 		dc.Consume(sizeof(float)).CastInto(out       x); rt.LowerIterationMultiplier = x;
 		dc.Consume(sizeof(float)).CastInto(out       x); rt.UpperIterationMultiplier = x;
 		dc.Consume(sizeof(int  )).CastInto(out int   y); rt.Seed = y;
-		
+		{
+            dc.ConsumeUntil((byte b) => b == 0).CastInto(out string str); 
+            rt.BlacklistedInteriorsString = str;
+            dc.Consume(1);
+		}
 		return rt;
 	}
 	

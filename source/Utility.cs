@@ -465,3 +465,56 @@ public class WeightedChoiceList<T> : WeightedList<T>, IChoice<T,float> {
 		ClosedWidth = 0.0f;
 	}
 }
+
+public struct Result<T, E> {
+	private static InvalidOperationException NotErrorException = new InvalidOperationException("Not an Err");
+	private static InvalidOperationException NotOkException = new InvalidOperationException("Not an Ok");
+	
+	public bool isOk {get; private set;}
+	public bool isErr {
+		get => !isOk;
+		private set => isOk = !value;
+	}
+	
+	private object dat;
+	
+	public T Ok {
+		get {
+			if (!isOk) throw NotOkException;
+			return (T)dat; 
+		} private set {
+			isOk = true;
+			dat = value;
+		}
+	}
+	public E Err {
+		get {
+			if (!isErr) {throw NotErrorException;}
+			return (E)dat; 
+		} private set {
+			isErr = true;
+			dat = value;
+		}
+	}
+	
+	public static Result<T,E> NewOk(T dat) {
+		var rt = new Result<T,E>();
+		rt.Ok = dat;
+		return rt;
+	}
+	public static Result<T,E> NewErr(E dat) {
+		var rt = new Result<T,E>();
+		rt.Err = dat;
+		return rt;
+	}
+	
+	public Result() {
+		Err = default;
+	}
+	public Result(T ok) {
+		Ok = ok;
+	}
+	public Result(E err) {
+		Err = err;
+	}
+}

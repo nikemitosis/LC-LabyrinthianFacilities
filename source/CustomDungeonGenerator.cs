@@ -733,7 +733,12 @@ public class GameMap : MonoBehaviour {
 	
 	public virtual bool PerformAction(GenerationAction action) {
 		if (action is PlacementInfo placement) {
-			this.TileInsertionEvent?.Invoke(this.AddTile(placement));
+			Result<Tile,string> result = this.AddTile(placement);
+			if (result.isOk) {
+				this.TileInsertionEvent?.Invoke(result.Ok);
+			} else {
+				this.TileInsertionEvent?.Invoke(null);
+			}
 		} else if (action is RemovalInfo removal) {
 			this.RemoveTile(removal);
 		} else if (action is ConnectAction connection) {
@@ -788,7 +793,7 @@ public class GameMap : MonoBehaviour {
 		return !this.boundsMap.Intersects(tile);
 	}
 	
-	public virtual Tile AddTile(PlacementInfo placement) {
+	public virtual Result<Tile,string> AddTile(PlacementInfo placement) {
 		Tile newTile = placement.NewTile;
 		if (newTile.IsPrefab) {
 			newTile = newTile.Instantiate(this.transform);
@@ -800,13 +805,13 @@ public class GameMap : MonoBehaviour {
 			Doorway leaf = placement.AttachmentPoint;
 			int newTileTargetDoorwayIdx = placement.NewDoorwayIdx;
 			
-			bool success = (
-				leaf.Fits(newTile.Doorways[newTileTargetDoorwayIdx]) 
-				&& newTile.Place(newTileTargetDoorwayIdx,leaf)
-			);
-			if (!success) {
+			if (!leaf.Fits(newTile.Doorways[newTileTargetDoorwayIdx])) {
 				GameObject.Destroy(newTile.gameObject);
-				return null;
+				return Result<Tile,string>.NewErr("Doorways do not fit");
+			}
+			if (!newTile.Place(newTileTargetDoorwayIdx,leaf)) {
+				GameObject.Destroy(newTile.gameObject);
+				return Result<Tile,string>.NewErr("Failure in Tile.Place");
 			}
 		}
 		foreach (Doorway d in newTile.Doorways) {
@@ -819,9 +824,10 @@ public class GameMap : MonoBehaviour {
 			// ensure that newTile is destroyed, in case GameMap.RemoveTile is overridden
 			if (newTile != null) GameObject.Destroy(newTile.gameObject); 
 			newTile = null;
+			return Result<Tile,string>.NewErr("Could not be added to boundsMap");
 		}
 		
-		return newTile;
+		return Result<Tile,string>.NewOk(newTile);
 	}
 	
 	private void RemoveTileAction(Tile t) {
