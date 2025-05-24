@@ -259,7 +259,7 @@ public class Config {
             section,
             "BlacklistedInteriors",
             "",
-            "Comma separated list of the names of interiors that should not use custom interior generation. This is typically reserved for interiors that do not generate correctly"
+            "Comma separated list of the names of dungeon flows that should not use custom interior generation. This is typically reserved for interiors that do not generate correctly. See LethalLevelLoader's config for the names of dungeon flows. Case Sensitive. "
         );
 		
 		section = "Features.EasterEggs";
@@ -392,6 +392,7 @@ public class Config {
                 stringList.Substring(startIdx).Trim()
             );
         }
+        
         return rt;
     }
 }
