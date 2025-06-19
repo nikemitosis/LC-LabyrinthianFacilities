@@ -95,8 +95,8 @@ public class Config {
     public string BlacklistedInteriorsString {
         get => p_blacklistedInteriorsString; 
         set {
-            BlacklistedInteriors = GetBlacklistedInteriors();
             p_blacklistedInteriorsString = value;
+            BlacklistedInteriors = GetBlacklistedInteriors();
         }
     }
 	
@@ -381,14 +381,14 @@ public class Config {
         int startIdx = 0;
         for (int i=0; i<stringList.Length; i++) {
             if (stringList[i] == ',') {
-                BlacklistedInteriors.Add(
+                rt.Add(
                     stringList.Substring(startIdx, startIdx-i).Trim()
                 );
                 startIdx = i+1;
             }
         }
         if (startIdx != stringList.Length) {
-            BlacklistedInteriors.Add(
+            rt.Add(
                 stringList.Substring(startIdx).Trim()
             );
         }

@@ -1,3 +1,9 @@
+# 0.7.3
+ - Fixed a `NullReferenceException` with `BlacklistedInteriors` bricking the mod
+
+# 0.7.2
+ - Added a "BlacklistedInteriors" config option. This is a comma separated list of `DungeonFlow` names 
+
 # v0.7.1
 
 ## Bugfixes

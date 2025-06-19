@@ -1,7 +1,7 @@
 {
 	"name": "LabyrinthianFacilities",
 	"description": "Adds continuity between days, preserving items and portions of interiors",
-	"version_number": "0.7.2",
+	"version_number": "0.7.3",
 	"dependencies": ["BepInEx-BepInExPack-5.4.2100"],
 	"website_url": "https://github.com/nikemitosis/LC-LabyrinthianFacilities"
 }
