@@ -302,7 +302,7 @@ public class DungeonFlowConverter : ITileGenerator {
 						if (
 							dtile == StartRoom 
 							|| dtile.name == "StartRoom" 
-							|| dtile.name == "ManorStartRoom"
+							|| dtile.name == "ManorStartRoomSmall"
 						) continue;
 						
 						float freq = tset_freq * tile_freq;

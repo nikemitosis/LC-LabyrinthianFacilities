@@ -26,6 +26,8 @@ using Object=UnityEngine.Object;
 // I *do* dislike how lethal handles consumable items, though (tetra, spraypaint)
 public abstract class MapObject : NetworkBehaviour {
 	
+    public virtual bool ShouldPreserve {get => true;}
+    
 	public static T GetPrefab<T>(string name) where T : UnityEngine.Component {
 		foreach (T s in Resources.FindObjectsOfTypeAll(typeof(T))) {
 			if (s.name == name && !s.gameObject.scene.IsValid()) return s;
@@ -75,6 +77,8 @@ public abstract class MapObject : NetworkBehaviour {
 
 public class GrabbableMapObject : MapObject {
 	public GrabbableObject Grabbable {get => this.GetComponent<GrabbableObject>();}
+    
+    public abstract override bool ShouldPreserve {get => Config.Singleton.SaveGrabbableMapObjects;}
 	
 	public override Transform FindParent(DGameMap map=null) {
 		var rt = base.FindParent(map);
@@ -87,7 +91,7 @@ public class GrabbableMapObject : MapObject {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveGrabbableMapObjects) return;
+		if (!this.ShouldPreserve()) return;
 		
 		var grabbable = this.Grabbable;
 		grabbable.isInShipRoom = (
@@ -115,6 +119,7 @@ public class GrabbableMapObject : MapObject {
 }
 
 public class Scrap : GrabbableMapObject {
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveScrap;}
 	
 	public static Scrap GetPrefab(string name) => MapObject.GetPrefab<Scrap>(name);
 	
@@ -125,7 +130,7 @@ public class Scrap : GrabbableMapObject {
 	}
 	
 	public override void Preserve() {
-		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveScrap) return;
+		if (!this.ShouldPreserve) return;
 		
 		base.Preserve();
 		var grabbable = this.Grabbable;
@@ -158,115 +163,180 @@ public class Scrap : GrabbableMapObject {
 // and should not use the normal initialization
 internal class DummyFlag : MonoBehaviour {}
 
-public class Beehive : Scrap {
-	
-	public struct BeeInfo {
-		public Vector3 position;
-		public int currentBehaviourStateIndex;
-		
-		public bool IsInvalid {get {return currentBehaviourStateIndex < 0;}}
-		
-		public BeeInfo(Vector3 position, int currentBehaviourStateIndex) {
-			this.position = position;
-			this.currentBehaviourStateIndex = currentBehaviourStateIndex;
-		}
-	}
-	
-	protected BeeInfo beeInfo = new BeeInfo(Vector3.zero, -1);
-	protected RedLocustBees bees = null;
-	
-	protected GameObject beesPrefab = null;
-	protected virtual GameObject BeesPrefab {
-		get {
-			if (this.beesPrefab == null) {
-				foreach (RedLocustBees bees in Resources.FindObjectsOfTypeAll<RedLocustBees>()) {
-					if (bees.name == "RedLocustBees") {
-						this.beesPrefab = bees.gameObject; 
-						break;
-					}
-				}
-			}
-			return this.beesPrefab;
-		}
-	}
-	
-	protected virtual void OnEnable() {
-		if (this.IsServer && this.GetComponentInParent<Moon>() != null) {
-			SpawnBees();
-		}
-	}
-	
-	protected virtual void OnDisable() {
+public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
+    
+    protected struct Parent {
+        public Vector3 position;
+        public int currentBehaviourStateIndex;
+        public ParentType reference = null;
+        
+        public bool IsInvalid {get => currentBehaviourStateIndex < 0;}
+        
+        private static GameObject prefab;
+        public static string prefabIdentifier = null;
+        public GameObject ParentPrefaab {get {
+            if (prefab == null) {
+                foreach (ParentType parent in Resources.FindObjectsOfTypeAll<ParentType>()) {
+                    if (parent.name == prefabIdentifier) {
+                        prefab = parent.gameObject;
+                        break;
+                    }
+                }
+            }
+            return prefab;
+        }}
+        
+        public Parent() : Parent(null) {}
+        public Parent(Vector3 position, int currentBehaviourStateIndex) {
+            this.position = position;
+            this.currentBehaviourStateIndex = currentBehaviourStateIndex;
+            this.reference = null;
+        }
+        public Parent(ParentType parent) {
+            if (parent == null) {
+                this.position = Vector3.zero;
+                this.currentBehaviourStateIndex = -1;
+                this.reference = null;
+            } else {
+                this.position = parent.transform.position;
+                this.currentBehaviourStateIndex = parent.currentBehaviourStateIndex;
+                this.reference = parent;
+            }
+        }
+        
+        public void Invalidate() {
+            this.position = Vector3.zero;
+            this.currentBehaviourStateIndex = -1;
+        }
+        
+        public void Save(ParentType parent) {
+            this.reference = parent;
+            if (parent == null) {
+                this.Invalidate();
+            } else {
+                this.position = parent.transform.position;
+                this.currentBehaviourStateIndex = parent.currentBehaviourStateIndex;
+            }
+        }
+        
+        public void Spawn() {
+            if (
+                !NetworkManager.Singleton.IsServer
+                || this.IsInvalid // parent assumed dead
+            ) return;
+            
+            GameObject g = GameObject.Instantiate(ParentPrefab,this.position,Quaternion.identity);
+            this.reference = g.GetComponent<ParentType>();
+            g.AddComponent<DummyFlag>();
+            g.GetComponent<NetworkObject>().Spawn();
+        }
+    }
+    
+    protected Parent parent = new Parent();
+    
+    protected virtual void OnEnable() {
+        if (this.IsServer && parent.reference == null && this.GetComponentInParent<Moon>() != null) {
+            this.SpawnParent();
+        }
+    }
+    
+    protected virtual void OnDisable() {
 		if (
 			IsServer
-			&& this.bees != null 
-			&& this.bees.IsSpawned
+			&& this.parent.reference != null 
+			&& this.parent.reference.IsSpawned
 		) {
-			this.bees.GetComponent<NetworkObject>().Despawn();
-			this.bees = null;
+			this.parent.reference.GetComponent<NetworkObject>().Despawn();
+			this.parent.reference = null;
 		}
 	}
-	
-	[ClientRpc]
-	protected virtual void SendBeesClientRpc(NetworkObjectReference beeNetObj, int behaviourStateIndex) {
+    
+    [ClientRpc]
+	protected void SendParentClientRpc(NetworkObjectReference parentNetObj, int behaviourStateIndex) {
 		if (IsServer) return;
-		this.bees = ((NetworkObject)beeNetObj).GetComponent<RedLocustBees>();
-		this.bees.hive = this.Grabbable;
-		this.bees.lastKnownHivePosition = this.transform.position;
-		this.bees.currentBehaviourStateIndex = behaviourStateIndex;
-		this.bees.gameObject.AddComponent<DummyFlag>();
+		this.parent = new Parent( ((NetworkObject)parentNetObj).GetComponent<ParentType>() );
+        this.parent.reference.currentBehaviourStateIndex = behaviourStateIndex;
+        this.ClientInit();
 	}
-	
-	protected virtual void SpawnBees() {
+    
+    protected abstract void ClientInit();
+    
+    protected void SpawnParent() {
 		if (!IsServer) return;
 		
-		if (this.beeInfo.IsInvalid) {
-			this.beeInfo = new BeeInfo(position: this.transform.position, currentBehaviourStateIndex: 0);
-		}
-		GameObject g = GameObject.Instantiate(BeesPrefab, this.beeInfo.position, Quaternion.identity);
-		
-		this.bees = g.GetComponent<RedLocustBees>();
-		
-		// These need to be synced with the client
-		this.bees.currentBehaviourStateIndex = this.beeInfo.currentBehaviourStateIndex;
-		this.bees.hive = this.Grabbable;
-		this.bees.lastKnownHivePosition = this.transform.position;
+        this.parent.Spawn();
+        if (this.parent.reference == null) return;
+        
+		this.ClientInit();
 		g.AddComponent<DummyFlag>();
 		
-		// Only server receives call to SpawnHiveNearEnemy, so only server needs DummyFlag
-		NetworkObject netObj = g.GetComponent<NetworkObject>();
-		netObj.Spawn();
-		this.SendBeesClientRpc(netObj,this.bees.currentBehaviourStateIndex);
+		this.SendParentClientRpc(
+            g.GetComponent<NetworkObject>(),
+            this.parent.reference.currentBehaviourStateIndex
+        );
 	}
-	
-	public void SaveBees(RedLocustBees bees) {
-		this.bees = bees;
-		if (bees != null) {
-			this.beeInfo = new BeeInfo(
-				position: this.bees.transform.position, 
-				currentBehaviourStateIndex: this.bees.currentBehaviourStateIndex
-			);
-		} else {
-			this.beeInfo = new BeeInfo(Vector3.zero, -1);
-		}
-	}
-	
-	public override void Preserve() {
-		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveHives) return;
+    
+    public virtual void SaveParent(ParentType p) {
+        this.parent.Save(p);
+    }
+    
+    public override void Preserve() {
+		if (!ShouldPreserve) return;
 		base.Preserve();
 		
 		if (this.Grabbable.isInShipRoom) {
-			this.beeInfo = new BeeInfo(Vector3.zero, -1);
+			this.parent.Invalidate();
 		}
 	}
+}
+
+public class Beehive : ParentedScrap<RedLocustBees> {
 	
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveBees;}
+    
+    protected override void ClientInit() {
+        this.parent.reference.hive = this.Grabbable;
+        this.parent.reference.lastKnownHivePosition = this.transform.position;
+        this.parent.reference.gameObject.AddComponent<DummyFlag>();
+    }
+    
+}
+
+public class BirdEgg : ParentedScrap<GiantKiwiAI> {
+    
+    protected List<BirdEgg> eggGroup;
+    
+    public override bool ShouldPreserve {get => base.ShouldPreserve /* && Config.Singleton.SaveSapsuckerEggs */;}
+    
+    public static List<BirdEgg> CreateEggGroup(GiantKiwiAI bird) {
+        var rt = new List<BirdEgg>(bird.eggs.Count);
+        foreach (KiwiBabyItem eggItem in bird.eggs) {
+            var egg = eggItem.GetComponent<BirdEgg>()
+            rt.Add(egg);
+            egg.eggGroup = rt;
+            egg.SaveParent(bird);
+        }
+        return rt;
+    }
+    
+    protected override OnEnable() {
+        if (this == eggGroup[0]) base.OnEnable();
+    }
+    
+    protected override void ClientInit() {
+        this.parent.reference.eggs.Add(this.Grabbable);
+        this.parent.reference.hasSpawnedEggs = true;
+        this.parent.reference.
+        this.parent.reference.
+    }
 }
 
 public class Equipment : GrabbableMapObject {
 	public static Equipment GetPrefab(string name) => MapObject.GetPrefab<Equipment>(name);
-	
+	public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveEquipment;}
+    
 	public override void Preserve() {
-		if (!Config.Singleton.SaveGrabbableMapObjects || !Config.Singleton.SaveEquipment) return;
+		if (!ShouldPreserve) return;
 		base.Preserve();
 	}
 }
@@ -288,7 +358,7 @@ public class GunEquipment : Scrap {
 	}
 	
 	public override void Preserve() {
-		if (!Grabbable.isHeldByEnemy) base.Preserve();
+		if (ShouldPreserve && !Grabbable.isHeldByEnemy) base.Preserve();
 	}
 }
 public class FueledEquipment : BatteryEquipment {
@@ -304,6 +374,7 @@ public class FueledEquipment : BatteryEquipment {
 public abstract class HazardBase : MapObject {}
 public abstract class Hazard<T> : HazardBase where T : NetworkBehaviour {
 	public T HazardScript {get => this.GetComponentInChildren<T>();}
+    public override bool ShouldPreserve {get => Config.Singleton.SaveHazards;}
 	public TerminalAccessibleObject TerminalAccess {
 		get => this.GetComponentInChildren<TerminalAccessibleObject>(true);
 	}
@@ -312,13 +383,13 @@ public abstract class Hazard<T> : HazardBase where T : NetworkBehaviour {
 	}
 	
 	public override void Preserve() {
-		if (Config.Singleton.SaveHazards) {
+		if (ShouldPreserve) {
 			this.FindParent();
 			MapRadarText?.SetActive(false);
 		}
 	}
 	public override void Restore() {
-		if (Config.Singleton.SaveHazards) {
+		if (ShouldPreserve) {
 			MapRadarText?.SetActive(true);
 			try {
 				TerminalAccess.setCodeRandomlyFromRoundManager = false;
@@ -327,14 +398,22 @@ public abstract class Hazard<T> : HazardBase where T : NetworkBehaviour {
 	}
 }
 public class TurretHazard : Hazard<Turret> {
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveTurrets;}
+    
 	public override void Preserve() {
-		if (Config.Singleton.SaveTurrets) base.Preserve();
+		if (ShouldPreserve) base.Preserve();
 	}
 }
 public class LandmineHazard : Hazard<Landmine> {
-	public override void Preserve() {
-		if (!HazardScript.hasExploded && Config.Singleton.SaveLandmines) base.Preserve();
-		else if (this.transform.parent != null) this.GetComponent<NetworkObject>().Despawn(destroy: true);
+	public override bool ShouldPreserve {
+        get => base.ShouldPreserve && Config.Singleton.SaveLandmines && !HazardScript.hasExploded;
+    }
+    
+    public override void Preserve() {
+		if (ShouldPreserve) base.Preserve();
+		else if (this.transform.parent != null) { // this landmine has been saved and must be explicitly destroyed
+            this.GetComponent<NetworkObject>().Despawn(destroy: true);
+        }
 	}
 	
 	public override void Restore() {
@@ -343,9 +422,7 @@ public class LandmineHazard : Hazard<Landmine> {
 	}
 }
 public class SpikeTrapHazard : Hazard<SpikeRoofTrap> {
-	public override void Preserve() {
-		if (Config.Singleton.SaveSpikeTraps) base.Preserve();
-	}
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Single.SaveSpikeTraps;}
 }
 
 public class Cruiser : NetworkBehaviour {

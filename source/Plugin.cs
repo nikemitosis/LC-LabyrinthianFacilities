@@ -29,7 +29,6 @@ using Object = UnityEngine.Object;
 using LogLevel = BepInEx.Logging.LogLevel;
 
 [BepInPlugin(Plugin.GUID, Plugin.NAME, Plugin.VERSION)]
-[BepInIncompatibility("Zaggy1024.PathfindingLib")]
 [BepInDependency("GGMD.GenericInteriors", BepInDependency.DependencyFlags.SoftDependency)]
 public sealed class Plugin : BaseUnityPlugin {
 	public const string GUID = "mitzapper2.LethalCompany.LabyrinthianFacilities";
@@ -166,6 +165,7 @@ public sealed class Plugin : BaseUnityPlugin {
 			switch (tile.gameObject.name) {
 				// manor 
 				case "CloverTile":
+                case "ThinStairTile":
 				// mineshaft
 				case "CaveCrampedIntersectTile":
 				case "CaveSmallIntersectTile":
