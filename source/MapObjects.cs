@@ -165,23 +165,20 @@ internal class DummyFlag : MonoBehaviour {}
 
 public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
     
+    private abstract string parentPrefabIdentifier {get;}
+    
     protected struct Parent {
-        public Vector3 position;
-        public int currentBehaviourStateIndex;
+        public Vector3 position = Vector3.zero;
+        public int currentBehaviourStateIndex = -1;
         public ParentType reference = null;
+        public List<ParentedScrap> scrapGroup = new();
         
         public bool IsInvalid {get => currentBehaviourStateIndex < 0;}
         
         private static GameObject prefab;
-        public static string prefabIdentifier = null;
-        public GameObject ParentPrefaab {get {
+        public GameObject ParentPrefab {get {
             if (prefab == null) {
-                foreach (ParentType parent in Resources.FindObjectsOfTypeAll<ParentType>()) {
-                    if (parent.name == prefabIdentifier) {
-                        prefab = parent.gameObject;
-                        break;
-                    }
-                }
+                prefab = MapObject.GetPrefab<ParentType>(parentPrefabIdentifier);
             }
             return prefab;
         }}
@@ -230,24 +227,40 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
             g.AddComponent<DummyFlag>();
             g.GetComponent<NetworkObject>().Spawn();
         }
-    }
-    
-    protected Parent parent = new Parent();
-    
-    protected virtual void OnEnable() {
-        if (this.IsServer && parent.reference == null && this.GetComponentInParent<Moon>() != null) {
-            this.SpawnParent();
+        
+        public void Despawn() {
+            
+            if (!NetworkManager.Singleton.IsServer || this.reference == null) return;
+            var netObj = this.reference.GetComponent<NetworkObject>();
+            if (netObj == null || !netObj.IsSpawned) return;
+            this.reference.GetComponent<NetworkObject>().Despawn();
+			this.reference = null;
         }
     }
     
-    protected virtual void OnDisable() {
-		if (
-			IsServer
+    public virtual bool ShouldSpawnParent {
+        get => (
+            this.IsServer 
+            && parent.reference == null 
+            && this.GetComponentInParent<Moon>() != null
+        );
+    }
+    public virtual bool ShouldDespawnParent {
+        get => (
+            this.IsServer
 			&& this.parent.reference != null 
 			&& this.parent.reference.IsSpawned
-		) {
-			this.parent.reference.GetComponent<NetworkObject>().Despawn();
-			this.parent.reference = null;
+        );
+    }
+    protected Parent parent = new Parent();
+    
+    protected void OnEnable() {
+        if (ShouldSpawnParent) this.SpawnParent();
+    }
+    
+    protected void OnDisable() {
+		if (ShouldDespawnParent) {
+            this.parent.Despawn();
 		}
 	}
     
@@ -256,10 +269,10 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
 		if (IsServer) return;
 		this.parent = new Parent( ((NetworkObject)parentNetObj).GetComponent<ParentType>() );
         this.parent.reference.currentBehaviourStateIndex = behaviourStateIndex;
-        this.ClientInit();
+        this.ParentClientInit();
 	}
     
-    protected abstract void ClientInit();
+    protected abstract void ParentClientInit();
     
     protected void SpawnParent() {
 		if (!IsServer) return;
@@ -268,13 +281,17 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
         if (this.parent.reference == null) return;
         
 		this.ClientInit();
-		g.AddComponent<DummyFlag>();
+		this.parent.reference.gameObject.AddComponent<DummyFlag>();
 		
-		this.SendParentClientRpc(
-            g.GetComponent<NetworkObject>(),
+        this.SendParent();
+	}
+    
+    protected virtual void SendParent() {
+        this.SendParentClientRpc(
+            this.parent.reference.gameObject.GetComponent<NetworkObject>(),
             this.parent.reference.currentBehaviourStateIndex
         );
-	}
+    }
     
     public virtual void SaveParent(ParentType p) {
         this.parent.Save(p);
@@ -304,30 +321,55 @@ public class Beehive : ParentedScrap<RedLocustBees> {
 
 public class BirdEgg : ParentedScrap<GiantKiwiAI> {
     
-    protected List<BirdEgg> eggGroup;
+    protected List<BirdEgg> eggGroup {
+        get => this.parent.scrapGroup;
+        set => this.parent.scrapGroup = value;
+    }
     
-    public override bool ShouldPreserve {get => base.ShouldPreserve /* && Config.Singleton.SaveSapsuckerEggs */;}
+    public override bool ShouldPreserve {
+        get => base.ShouldPreserve /* && Config.Singleton.SaveSapsuckerEggs */;
+    }
+    
+    public override bool ShouldSpawnParent   {get => base.ShouldSpawnParent   && this == eggGroup[0];}
+    public override bool ShouldDespawnParent {get => base.ShouldDespawnParent && this == eggGroup[0];}
     
     public static List<BirdEgg> CreateEggGroup(GiantKiwiAI bird) {
         var rt = new List<BirdEgg>(bird.eggs.Count);
         foreach (KiwiBabyItem eggItem in bird.eggs) {
             var egg = eggItem.GetComponent<BirdEgg>()
             rt.Add(egg);
-            egg.eggGroup = rt;
             egg.SaveParent(bird);
         }
+        this.parent.scrapGroup = rt;
         return rt;
     }
     
-    protected override OnEnable() {
-        if (this == eggGroup[0]) base.OnEnable();
+    public override void SaveParent(GiantKiwiAI parent) {
+        base.SaveParent(parent);
+        this.parent.scrapGroup = parent.eggs;
+    }
+    
+    protected override void SendParent() {
+        base.SendParent();
+        
+        SendGiantKiwiClientRpc(
+            this.parent.reference.GetComponent<NetworkObject>()
+        );
     }
     
     protected override void ClientInit() {
         this.parent.reference.eggs.Add(this.Grabbable);
         this.parent.reference.hasSpawnedEggs = true;
-        this.parent.reference.
-        this.parent.reference.
+    }
+    
+    [ClientRpc]
+    private void SendGiantKiwiClientRpc(
+        NetworkObjectReference netObjRef, NetworkObjectReference[] eggs
+    ) {
+        NetworkObject netObj = (NetworkObject)netObjRef;
+        GiantKiwiAI giantKiwi = netObj.GetComponent<GiantKiwiAI>();
+        
+        giantKiwi.eggs = new List<KiwiBabyItem>(eggs.Length);
     }
 }
 
