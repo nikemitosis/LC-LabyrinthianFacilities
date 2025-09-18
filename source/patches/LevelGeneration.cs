@@ -255,6 +255,27 @@ public class RespawnBeesPatch {
 	}
 }
 
+[HarmonyPatch(typeof(GiantKiwiAI))]
+public class RespawnEggsPatch {
+    [HarmonyPatch("SpawnBirdNest")]
+    [HarmonyPrefix]
+    public static void DontSpawnNewNest() {
+        
+    }
+    
+    [HarmonyPatch("SpawnNestEggs")]
+    [HarmonyPrefix]
+    public static void DontSpawnNewEggs() {
+        
+    }
+    
+    [HarmonyPatch("Start")]
+    [HarmonyPostfix]
+    public static void RemoveDummyFlag() {
+        
+    }    
+}
+
 [HarmonyPatch(typeof(RoundManager))]
 public class DontDestroyRandomMapObjects {
 	// stop roundmanager from deleting spawn points for mapobjects (if we aren't saving hazards)

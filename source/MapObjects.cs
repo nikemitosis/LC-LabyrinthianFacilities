@@ -302,6 +302,7 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
 		base.Preserve();
 		
 		if (this.Grabbable.isInShipRoom) {
+            this.parent.scrapGroup.Remove(this);
 			this.parent.Invalidate();
 		}
 	}
@@ -909,6 +910,50 @@ public class ScrapSerializer<T> : GrabbableMapObjectSerializer<T> where T : Scra
 		
 		return rt;
 	}
+}
+
+public class BirdEggSerializer<T> : ScrapSerializer<T> where T : BirdEgg {
+    /* Format:
+     * base
+     * BirdEgg[] siblings
+    */
+    public override void SerializeData(SerializationContext sc, T egg) {
+        base.SerializeData(sc);
+        
+        if (egg != egg.eggGroup[0]) {
+            sc.Add((ushort)(-1));
+            return;
+        } else {
+            ushort numSiblings = (ushort)egg.eggGroup.Count;
+            if (numSiblings != egg.eggGroup.Count || numSiblings == (ushort)(-1)) {
+                Plugin.LogError("Too many eggs in one family... more than 65,534... wtf?");
+            }
+            sc.Add(numSiblings);
+            foreach (BirdEgg sibling in egg.eggGroup) {
+                sc.AddReference(sibling,this);
+            }
+        }
+    }
+    
+    public override void DeserializeData(T rt, DeserializationContext dc) {
+        base.DeserializeData(rt, dc);
+        
+        dc.Consume(sizeof(ushort)).CastInto(out ushort numSiblings);
+        if (numSiblings == (ushort)(-1)) return;
+        
+        rt.eggGroup = new List<BirdEgg>(numSiblings);
+        rt.eggGroup.Add(rt);
+        for (ushort i=0; i<numSiblings; i++) {
+            dc.ConsumeReference(
+                this,
+                (object sibling) => {
+                    BirdEgg s = (BirdEgg)sibling;
+                    s.eggGroup = rt.eggGroup;
+                    rt.eggGroup.Add(s);
+                }
+            );
+        }
+    }
 }
 
 public class GunEquipmentSerializer<T> : ScrapSerializer<T> where T : GunEquipment {
