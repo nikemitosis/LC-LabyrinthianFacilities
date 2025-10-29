@@ -78,7 +78,7 @@ public abstract class MapObject : NetworkBehaviour {
 public class GrabbableMapObject : MapObject {
 	public GrabbableObject Grabbable {get => this.GetComponent<GrabbableObject>();}
     
-    public abstract override bool ShouldPreserve {get => Config.Singleton.SaveGrabbableMapObjects;}
+    public override bool ShouldPreserve {get => Config.Singleton.SaveGrabbableMapObjects;}
 	
 	public override Transform FindParent(DGameMap map=null) {
 		var rt = base.FindParent(map);
@@ -91,7 +91,7 @@ public class GrabbableMapObject : MapObject {
 	}
 	
 	public override void Preserve() {
-		if (!this.ShouldPreserve()) return;
+		if (!this.ShouldPreserve) return;
 		
 		var grabbable = this.Grabbable;
 		grabbable.isInShipRoom = (
@@ -161,35 +161,52 @@ public class Scrap : GrabbableMapObject {
 
 // The purpose of this is to mark an object that is being spawned/instantiated by the mod, 
 // and should not use the normal initialization
-internal class DummyFlag : MonoBehaviour {}
-
-public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
+internal class DummyFlag : MonoBehaviour {
+    public static bool Detect(MonoBehaviour obj) { // returns false on obj null
+        return obj?.GetComponent<DummyFlag>() != null;
+    }
     
-    private abstract string parentPrefabIdentifier {get;}
+    public static bool Destroy(MonoBehaviour obj) {
+        DummyFlag flag = obj?.GetComponent<DummyFlag>();
+        if (flag == null) return false;
+        MonoBehaviour.Destroy(flag);
+        return true;
+    }
+}
+
+public abstract class ParentedScrapBase : Scrap {}
+public abstract class ParentedScrap<ParentType> : ParentedScrapBase where ParentType : EnemyAI {
+    
+    protected abstract string parentPrefabIdentifier {get;}
     
     protected struct Parent {
+        ParentedScrap<ParentType> owner;
+        
+        // Saved parent info
         public Vector3 position = Vector3.zero;
         public int currentBehaviourStateIndex = -1;
+        
+        // Active parent info
         public ParentType reference = null;
-        public List<ParentedScrap> scrapGroup = new();
         
         public bool IsInvalid {get => currentBehaviourStateIndex < 0;}
+        public bool IsValid {get => !IsInvalid;}
         
-        private static GameObject prefab;
-        public GameObject ParentPrefab {get {
-            if (prefab == null) {
-                prefab = MapObject.GetPrefab<ParentType>(parentPrefabIdentifier);
-            }
-            return prefab;
-        }}
+        private GameObject prefab;
+        public GameObject ParentPrefab {
+            get => prefab ??= MapObject.GetPrefab<ParentType>(owner?.parentPrefabIdentifier).gameObject;
+        }
         
-        public Parent() : Parent(null) {}
-        public Parent(Vector3 position, int currentBehaviourStateIndex) {
+        public Parent() : this(null) {}
+        public Parent(ParentedScrap<ParentType> owner) : this(owner,null) {}
+        public Parent(ParentedScrap<ParentType> owner, Vector3 position, int currentBehaviourStateIndex) {
+            this.owner = owner;
             this.position = position;
             this.currentBehaviourStateIndex = currentBehaviourStateIndex;
             this.reference = null;
         }
-        public Parent(ParentType parent) {
+        public Parent(ParentedScrap<ParentType> owner, ParentType parent) {
+            this.owner = owner;
             if (parent == null) {
                 this.position = Vector3.zero;
                 this.currentBehaviourStateIndex = -1;
@@ -206,13 +223,17 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
             this.currentBehaviourStateIndex = -1;
         }
         
-        public void Save(ParentType parent) {
+        public void Save(ParentedScrap<ParentType> owner, ParentType parent) {
+            this.owner = owner;
             this.reference = parent;
+            Plugin.LogFatal($"Saving {parent}");
             if (parent == null) {
+                Plugin.LogFatal($"Invalid parent");
                 this.Invalidate();
             } else {
                 this.position = parent.transform.position;
                 this.currentBehaviourStateIndex = parent.currentBehaviourStateIndex;
+                Plugin.LogFatal($"Success!");
             }
         }
         
@@ -226,6 +247,7 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
             this.reference = g.GetComponent<ParentType>();
             g.AddComponent<DummyFlag>();
             g.GetComponent<NetworkObject>().Spawn();
+            Plugin.LogFatal($"Spawned parent {g}");
         }
         
         public void Despawn() {
@@ -242,6 +264,7 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
         get => (
             this.IsServer 
             && parent.reference == null 
+            && parent.IsValid
             && this.GetComponentInParent<Moon>() != null
         );
     }
@@ -260,6 +283,7 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
     
     protected void OnDisable() {
 		if (ShouldDespawnParent) {
+            this.SaveParent();
             this.parent.Despawn();
 		}
 	}
@@ -267,7 +291,7 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
     [ClientRpc]
 	protected void SendParentClientRpc(NetworkObjectReference parentNetObj, int behaviourStateIndex) {
 		if (IsServer) return;
-		this.parent = new Parent( ((NetworkObject)parentNetObj).GetComponent<ParentType>() );
+		this.parent = new Parent(this, ((NetworkObject)parentNetObj).GetComponent<ParentType>() );
         this.parent.reference.currentBehaviourStateIndex = behaviourStateIndex;
         this.ParentClientInit();
 	}
@@ -275,12 +299,12 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
     protected abstract void ParentClientInit();
     
     protected void SpawnParent() {
-		if (!IsServer) return;
-		
+        Plugin.LogFatal($"Spawning Parent for {this}");
+        
         this.parent.Spawn();
         if (this.parent.reference == null) return;
         
-		this.ClientInit();
+		this.ParentClientInit();
 		this.parent.reference.gameObject.AddComponent<DummyFlag>();
 		
         this.SendParent();
@@ -293,8 +317,14 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
         );
     }
     
-    public virtual void SaveParent(ParentType p) {
-        this.parent.Save(p);
+    protected abstract ParentType FindParent();
+    
+    public virtual void SaveParent() {
+        if (this.parent.reference != null) {
+            this.parent.Save(this,this.parent.reference);
+            return;
+        }
+        this.parent.Save(this,FindParent());
     }
     
     public override void Preserve() {
@@ -302,17 +332,31 @@ public abstract class ParentedScrap<T> : Scrap where T : EnemyAI {
 		base.Preserve();
 		
 		if (this.Grabbable.isInShipRoom) {
-            this.parent.scrapGroup.Remove(this);
-			this.parent.Invalidate();
-		}
-	}
+			this.InvalidateParent();
+        } else if (this.parent.IsInvalid) {
+            this.SaveParent();
+        }
+    }
+    
+    public virtual void InvalidateParent() {
+        this.parent.Invalidate();
+    }
 }
 
 public class Beehive : ParentedScrap<RedLocustBees> {
-	
-    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveBees;}
+	protected override string parentPrefabIdentifier {get => "RedLocustHive";}
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveHives;}
     
-    protected override void ClientInit() {
+    protected override RedLocustBees FindParent() {
+        foreach (RedLocustBees beeSwarm in GameObject.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
+            if (beeSwarm.hive == this.Grabbable) {
+                return beeSwarm;
+            }
+        }
+        return null;
+    }
+    
+    protected override void ParentClientInit() {
         this.parent.reference.hive = this.Grabbable;
         this.parent.reference.lastKnownHivePosition = this.transform.position;
         this.parent.reference.gameObject.AddComponent<DummyFlag>();
@@ -321,10 +365,14 @@ public class Beehive : ParentedScrap<RedLocustBees> {
 }
 
 public class BirdEgg : ParentedScrap<GiantKiwiAI> {
+    protected override string parentPrefabIdentifier {get => "GiantKiwi";}
+    protected List<BirdEgg> eggGroup = null;
     
-    protected List<BirdEgg> eggGroup {
-        get => this.parent.scrapGroup;
-        set => this.parent.scrapGroup = value;
+    public Vector3 NestPos = Vector3.zero;
+    
+    public IList<BirdEgg> EggGroup {
+        get => eggGroup.AsReadOnly();
+        internal set => eggGroup ??= (List<BirdEgg>)value;
     }
     
     public override bool ShouldPreserve {
@@ -334,35 +382,61 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
     public override bool ShouldSpawnParent   {get => base.ShouldSpawnParent   && this == eggGroup[0];}
     public override bool ShouldDespawnParent {get => base.ShouldDespawnParent && this == eggGroup[0];}
     
-    public static List<BirdEgg> CreateEggGroup(GiantKiwiAI bird) {
-        var rt = new List<BirdEgg>(bird.eggs.Count);
-        foreach (KiwiBabyItem eggItem in bird.eggs) {
-            var egg = eggItem.GetComponent<BirdEgg>()
-            rt.Add(egg);
-            egg.SaveParent(bird);
+    protected override GiantKiwiAI FindParent() => ((KiwiBabyItem)this.Grabbable).mamaAI;
+    
+    // All clients do this
+    public override void SaveParent() {
+        base.SaveParent();
+        this.NestPos = parent.reference.birdNest.transform.position;
+        if (
+            parent.reference == null 
+            || parent.reference.eggs[0].GetComponent<BirdEgg>() != this
+        ) return;
+        
+        this.eggGroup = new List<BirdEgg>(parent.reference.eggs.Count);
+        foreach (KiwiBabyItem kbi in parent.reference.eggs) {
+            var birdEgg = kbi.GetComponent<BirdEgg>();
+            this.eggGroup.Add(birdEgg);
+            birdEgg.eggGroup = this.eggGroup;
         }
-        this.parent.scrapGroup = rt;
-        return rt;
     }
     
-    public override void SaveParent(GiantKiwiAI parent) {
-        base.SaveParent(parent);
-        this.parent.scrapGroup = parent.eggs;
-    }
-    
+    // Only server does this - called by SpawnParent
     protected override void SendParent() {
         base.SendParent();
         
+        var eggs = new NetworkObjectReference[this.parent.reference.eggs.Count];
+        for (int i=0; i<this.parent.reference.eggs.Count; i++) {
+            eggs[i] = this.parent.reference.eggs[i].GetComponent<NetworkObject>();
+        }
+        
         SendGiantKiwiClientRpc(
-            this.parent.reference.GetComponent<NetworkObject>()
+            this.parent.reference.GetComponent<NetworkObject>(),
+            eggs
         );
     }
     
-    protected override void ClientInit() {
-        this.parent.reference.eggs.Add(this.Grabbable);
-        this.parent.reference.hasSpawnedEggs = true;
+    protected override void ParentClientInit() {
+        if (this != this.eggGroup[0]) return;
+        
+        GiantKiwiAI parent = this.parent.reference;
+        parent.gameObject.AddComponent<DummyFlag>();
+        
+        parent.eggs = new List<KiwiBabyItem>(this.eggGroup.Count);
+        foreach (BirdEgg egg in this.eggGroup) {
+            parent.eggs.Add((KiwiBabyItem)egg.Grabbable);
+        }
+        
+        parent.birdNest = UnityEngine.Object.Instantiate(
+            parent.birdNestPrefab, 
+            this.NestPos, 
+            Quaternion.Euler(Vector3.zero), 
+            RoundManager.Instance.mapPropsContainer.transform
+        );
     }
     
+    // GiantKiwiAI reference sent in this function because SendParentClientRpc may not have executed yet, 
+    // so this.parent may not be initialized
     [ClientRpc]
     private void SendGiantKiwiClientRpc(
         NetworkObjectReference netObjRef, NetworkObjectReference[] eggs
@@ -371,6 +445,17 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
         GiantKiwiAI giantKiwi = netObj.GetComponent<GiantKiwiAI>();
         
         giantKiwi.eggs = new List<KiwiBabyItem>(eggs.Length);
+        for (int i=0; i<eggs.Length; i++) {
+            giantKiwi.eggs[i] = ((NetworkObject)eggs[i]).GetComponent<KiwiBabyItem>();
+        }
+    }
+    
+    public override void InvalidateParent() {
+        if (this.parent.reference != null) {
+            this.parent.reference.eggs.Remove(this.GetComponent<KiwiBabyItem>());
+        }
+        this.eggGroup.Remove(this);
+        base.InvalidateParent();
     }
 }
 
@@ -465,7 +550,7 @@ public class LandmineHazard : Hazard<Landmine> {
 	}
 }
 public class SpikeTrapHazard : Hazard<SpikeRoofTrap> {
-    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Single.SaveSpikeTraps;}
+    public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveSpikeTraps;}
 }
 
 public class Cruiser : NetworkBehaviour {
@@ -605,6 +690,7 @@ public class Cruiser : NetworkBehaviour {
 public struct MapObjectCollection {
 	
 	public List<Scrap>            Scrap;
+    public List<IList<BirdEgg>>   EggGroups;
 	public List<Equipment>        Equipment;
 	public List<BatteryEquipment> BatteryEquipment;
 	public List<GunEquipment>     GunEquipment;
@@ -616,12 +702,16 @@ public struct MapObjectCollection {
 	) {}
 	public MapObjectCollection(ICollection<GrabbableMapObject> mapObjects) {
 		this.Scrap            = new(mapObjects.Count);
+        this.EggGroups        = new(mapObjects.Count);
 		this.Equipment        = new(mapObjects.Count);
 		this.BatteryEquipment = new(mapObjects.Count);
 		this.GunEquipment     = new(mapObjects.Count);
 		this.FueledEquipment  = new(mapObjects.Count);
 		foreach (MapObject mo in mapObjects) {
-			if (mo is Scrap s) {
+			if (mo is BirdEgg egg) {
+                if (egg != egg.EggGroup[0]) continue;
+                EggGroups.Add(egg.EggGroup);
+            } else if (mo is Scrap s) {
 				Scrap.Add(s);
 			} else if (mo is GunEquipment ge) {
 				GunEquipment.Add(ge);
@@ -643,7 +733,8 @@ public struct MapObjectCollection {
 		ISerializer<Equipment> es, 
 		ISerializer<BatteryEquipment> bes,
 		ISerializer<GunEquipment> ges,
-		ISerializer<FueledEquipment> fes
+		ISerializer<FueledEquipment> fes,
+        ISerializer<ICollection<BirdEgg>> eggSer
 	) {
 		sc.Add((ushort)this.Scrap.Count);
 		foreach (var s in this.Scrap) {
@@ -669,6 +760,11 @@ public struct MapObjectCollection {
 		foreach (var eq in this.FueledEquipment) {
 			sc.AddInline(eq,fes);
 		}
+        
+        sc.Add((ushort)this.EggGroups.Count);
+        foreach (var eg in this.EggGroups) {
+            sc.AddInline(eg,eggSer);
+        }
 	}
 	
 	public static void Deserialize(
@@ -677,12 +773,13 @@ public struct MapObjectCollection {
 		ISerializer<Equipment> es, 
 		ISerializer<BatteryEquipment> bes,
 		ISerializer<GunEquipment> ges,
-		ISerializer<FueledEquipment> fes
+		ISerializer<FueledEquipment> fes,
+        ISerializer<ICollection<BirdEgg>> eggSer
 	) {
-		foreach (ISerializer<MapObject> s in (ISerializer<MapObject>[])[ss,es,bes,ges,fes]) {
+		foreach (ISerializer<object> s in (ISerializer<object>[])[ss,es,bes,ges,fes,eggSer]) {
 			dc.Consume(sizeof(ushort)).CastInto(out ushort count);
 			if (DeserializationContext.Verbose) Plugin.LogDebug($"Found {count} items for {s}");
-			for (int i=0; i<count; i++) {
+			for (ushort i=0; i<count; i++) {
 				dc.ConsumeInline(s);
 			}
 		}
@@ -720,7 +817,7 @@ public class MapObjectGroupSerializer<T> : CollectionSerializer<T>, IMapObjectGr
 	
 	public T GetPrefab(string id) => this.Prefab = MapObject.GetPrefab<T>(id);
 	
-	protected override void PreserializeStep(ICollection<T> mapObjects) {
+	protected override void PreserializeStep(SerializationContext sc, ICollection<T> mapObjects) {
 		foreach(T item in mapObjects) {
 			if (item == null) {
 				Plugin.LogError("Null mapObject {item} in collection");
@@ -912,46 +1009,65 @@ public class ScrapSerializer<T> : GrabbableMapObjectSerializer<T> where T : Scra
 	}
 }
 
-public class BirdEggSerializer<T> : ScrapSerializer<T> where T : BirdEgg {
-    /* Format:
-     * base
-     * BirdEgg[] siblings
-    */
-    public override void SerializeData(SerializationContext sc, T egg) {
-        base.SerializeData(sc);
-        
-        if (egg != egg.eggGroup[0]) {
-            sc.Add((ushort)(-1));
-            return;
-        } else {
-            ushort numSiblings = (ushort)egg.eggGroup.Count;
-            if (numSiblings != egg.eggGroup.Count || numSiblings == (ushort)(-1)) {
-                Plugin.LogError("Too many eggs in one family... more than 65,534... wtf?");
-            }
-            sc.Add(numSiblings);
-            foreach (BirdEgg sibling in egg.eggGroup) {
-                sc.AddReference(sibling,this);
-            }
-        }
+public class EggGroupSerializer<T> : CollectionSerializer<T> where T : BirdEgg {
+    
+    
+    public EggGroupSerializer(Moon      parent, bool networkSerializer=false) : this(
+        (MonoBehaviour)parent, networkSerializer
+    ) {}
+    public EggGroupSerializer(DGameMap  parent, bool networkSerializer=false) : this(
+        (MonoBehaviour)parent, networkSerializer
+    ) {}
+    public EggGroupSerializer(Cruiser   parent, bool networkSerializer=false) : this(
+        (MonoBehaviour)parent, networkSerializer
+    ) {}
+    
+    private EggGroupSerializer(MonoBehaviour parent, bool networkSerializer) {
+        this.Parent = parent;
+        Init(new ScrapSerializer<T>(this.Parent));
     }
     
-    public override void DeserializeData(T rt, DeserializationContext dc) {
-        base.DeserializeData(rt, dc);
+    protected MonoBehaviour Parent = null;
+    protected T Prefab = null;
+    protected Vector3 NestPos = Vector3.zero;
+    
+    protected override void PreserializeStep(SerializationContext sc, ICollection<T> eggGroup) {
+        foreach (T egg in eggGroup) {
+            sc.Add(egg.NestPos.x);
+            sc.Add(egg.NestPos.y);
+            sc.Add(egg.NestPos.z);
+            return;
+        }
+        Plugin.LogError($"EggGroup with no eggs being serialized");
+        sc.Add(0.0f);
+        sc.Add(0.0f);
+        sc.Add(0.0f);
+    }
+    
+    protected override void DeserializeSharedPreamble(DeserializationContext dc) {
+        dc.Consume(sizeof(float)).CastInto(out float x);
+        dc.Consume(sizeof(float)).CastInto(out float y);
+        dc.Consume(sizeof(float)).CastInto(out float z);
+        this.NestPos = new Vector3(x,y,z);
         
-        dc.Consume(sizeof(ushort)).CastInto(out ushort numSiblings);
-        if (numSiblings == (ushort)(-1)) return;
-        
-        rt.eggGroup = new List<BirdEgg>(numSiblings);
-        rt.eggGroup.Add(rt);
-        for (ushort i=0; i<numSiblings; i++) {
-            dc.ConsumeReference(
-                this,
-                (object sibling) => {
-                    BirdEgg s = (BirdEgg)sibling;
-                    s.eggGroup = rt.eggGroup;
-                    rt.eggGroup.Add(s);
-                }
-            );
+        dc.ConsumeUntil((byte b) => b == 0).CastInto(out string id);
+		dc.Consume(1);
+		this.Prefab = MapObject.GetPrefab<T>(id);
+    }
+    
+    public override T GetItemSkeleton() {
+        if (!NetworkManager.Singleton.IsServer || Parent == null) {
+			return null;
+		}
+		var go = GameObject.Instantiate(this.Prefab);
+		go.GetComponent<NetworkObject>().Spawn();
+		return go.GetComponent<T>();
+    }
+    
+    public void Finalize(ICollection<T> eggGroup) {
+        foreach (T egg in eggGroup) {
+            egg.EggGroup = (List<BirdEgg>)eggGroup;
+            egg.NestPos = NestPos;
         }
     }
 }
@@ -1167,6 +1283,55 @@ public class ScrapNetworkSerializer<T> : GrabbableMapObjectNetworkSerializer<T> 
 	}
 }
 
+public class EggGroupNetworkSerializer : Serializer<List<BirdEgg>> {
+    
+    protected ScrapNetworkSerializer<BirdEgg> memberSerializer;
+    
+    
+    public EggGroupNetworkSerializer(Moon p) {
+        memberSerializer = new ScrapNetworkSerializer<BirdEgg>(p);
+    }
+    public EggGroupNetworkSerializer(DGameMap p) {
+        memberSerializer = new ScrapNetworkSerializer<BirdEgg>(p);
+    }
+    public EggGroupNetworkSerializer(Cruiser p) {
+        memberSerializer = new ScrapNetworkSerializer<BirdEgg>(p);
+    }
+    
+    /* public EggGroupNetworkSerializer(MonoBehaviour p) {
+        if (!(p is Moon || p is DGameMap || p is Cruiser)) {
+            Plugin.LogError($"EggGroupNetworkSerializer Parent not a valid MonoBehaviour; {typeof(p)}");
+        }
+    } */
+    
+    public override void Serialize(SerializationContext sc, List<BirdEgg> eggGroup) {
+        sc.Add((byte)eggGroup.Count);
+        foreach (BirdEgg egg in eggGroup) {
+            memberSerializer.Serialize(sc,egg);
+        }
+    }
+    
+    protected override List<BirdEgg> Deserialize(List<BirdEgg> eggGroup, DeserializationContext dc) {
+        
+        foreach (BirdEgg egg in eggGroup) {
+            egg.EggGroup = eggGroup;
+        }
+        
+        return eggGroup;
+    }
+    
+    public override List<BirdEgg> Deserialize(DeserializationContext dc) {
+        dc.Consume(sizeof(byte)).CastInto(out byte numEggs);
+        var rt = new List<BirdEgg>((int)numEggs);
+        
+        for (byte i=0; i<numEggs; i++) {
+            rt.Add((BirdEgg)dc.ConsumeInline(memberSerializer));
+        }
+        
+        return base.Deserialize(rt,dc);
+    }
+}
+
 public class BatteryEquipmentNetworkSerializer<T> 
 	: GrabbableMapObjectNetworkSerializer<T> 
 	where T : BatteryEquipment 
@@ -1301,7 +1466,8 @@ public class CruiserSerializer : Serializer<Cruiser> {
 			new EquipmentSerializer       <Equipment>       (cruiser),
 			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
 			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
-			new BatteryEquipmentSerializer<FueledEquipment> (cruiser)
+			new BatteryEquipmentSerializer<FueledEquipment> (cruiser),
+            new EggGroupSerializer        <BirdEgg>         (cruiser)
 		);
 	}
 	
@@ -1354,7 +1520,8 @@ public class CruiserSerializer : Serializer<Cruiser> {
 			new EquipmentSerializer       <Equipment>       (cruiser),
 			new BatteryEquipmentSerializer<BatteryEquipment>(cruiser),
 			new GunEquipmentSerializer    <GunEquipment>    (cruiser),
-			new BatteryEquipmentSerializer<FueledEquipment> (cruiser)
+			new BatteryEquipmentSerializer<FueledEquipment> (cruiser),
+            new EggGroupSerializer        <BirdEgg>         (cruiser)
 		);
 		
 		return cruiser;
@@ -1409,7 +1576,8 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (tgt),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(tgt),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (tgt),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (tgt)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (tgt),
+            new EggGroupNetworkSerializer                            (tgt)
 		);
 	}
 	
@@ -1465,7 +1633,8 @@ public class CruiserNetworkSerializer : Serializer<Cruiser> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (tgt),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(tgt),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (tgt),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (tgt)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (tgt),
+			new EggGroupNetworkSerializer                            (tgt)
 		);
 		
 		return tgt;

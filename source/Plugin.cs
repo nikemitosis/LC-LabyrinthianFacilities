@@ -208,7 +208,9 @@ public sealed class Plugin : BaseUnityPlugin {
 					grabbable.gameObject.AddComponent<Beehive>();
 				} else if (grabbable is ShotgunItem) {
 					grabbable.gameObject.AddComponent<GunEquipment>();
-				} else {
+				} else if (grabbable is KiwiBabyItem) {
+                    grabbable.gameObject.AddComponent<BirdEgg>();
+                } else {
 					grabbable.gameObject.AddComponent<Scrap>();
 				}
 			} else if (
@@ -703,12 +705,15 @@ public class Moon : MonoBehaviour {
 		foreach (HazardBase obj in Object.FindObjectsByType<HazardBase>(FindObjectsSortMode.None)) {
 			obj.Preserve();
 		}
-		
-		if (Config.Singleton.SaveHives) {
+		foreach(ParentedScrapBase obj in Object.FindObjectsByType<ParentedScrapBase>(FindObjectsSortMode.None)) {
+            obj.Preserve();
+        }
+		/* if (Config.Singleton.SaveHives) {
 			foreach (RedLocustBees bee in Object.FindObjectsByType<RedLocustBees>(FindObjectsSortMode.None)) {
 				bee.hive.GetComponent<Beehive>().SaveBees(bee);
 			}
-		}
+		} */
+        
 		if (Config.Singleton.SaveCruisers) {
 			foreach (Cruiser cruiser in Object.FindObjectsByType<Cruiser>(FindObjectsSortMode.None)) {
 				cruiser.Preserve();
@@ -945,7 +950,8 @@ public class MoonSerializer : Serializer<Moon> {
 			new EquipmentSerializer       <Equipment       >(moon),
 			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
 			new GunEquipmentSerializer    <GunEquipment    >(moon),
-			new BatteryEquipmentSerializer<FueledEquipment >(moon)
+			new BatteryEquipmentSerializer<FueledEquipment >(moon),
+            new EggGroupSerializer        <BirdEgg         >(moon)
 		);
 		
 		// Serialize cruisers
@@ -973,7 +979,8 @@ public class MoonSerializer : Serializer<Moon> {
 			new EquipmentSerializer       <Equipment>       (moon),
 			new BatteryEquipmentSerializer<BatteryEquipment>(moon),
 			new GunEquipmentSerializer    <GunEquipment>    (moon),
-			new BatteryEquipmentSerializer<FueledEquipment> (moon)
+			new BatteryEquipmentSerializer<FueledEquipment> (moon),
+            new EggGroupSerializer        <BirdEgg>         (moon)
 		);
 		
 		dc.Consume(2).CastInto(out ushort numCruisers);
@@ -1025,7 +1032,8 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (moon),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(moon),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (moon),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon),
+            new EggGroupNetworkSerializer                            (moon)
 		);
 		
 		// Cruisers
@@ -1053,7 +1061,8 @@ public class MoonNetworkSerializer : Serializer<Moon> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (moon),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(moon),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (moon),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (moon),
+            new EggGroupNetworkSerializer                            (moon)
 		);
 		
 		// Cruisers

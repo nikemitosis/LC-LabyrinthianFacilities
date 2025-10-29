@@ -1,8 +1,14 @@
-# 0.7.4
+# 0.8
  - Fixed Manor start room being able to generate twice due to its name being changed from `ManorStartRoom` to `ManorStartRoomSmall`
  - \[IN PROGRESS\] Fixed Sapsuckers orphaning their eggs. 
    - Refactored some code involving beehives so eggs could inherit some of their behaviour
  - Removed incompatibility with PathFindingLib/PathFindingLagFix because the mods *might* now be compatible. 
+## TODO: 
+ - Bees are broken :(
+ - Sapsuckers not respawning (and maybe neither are their nests?)
+ - Make sure new manor tiles are spawning with y-axis vertical
+ - Add a way for players to manually specify names of tiles whose z-axis is the vertical
+ - Make sure serialization isn't broken
 
 # 0.7.3
  - Fixed a `NullReferenceException` with `BlacklistedInteriors` bricking the mod

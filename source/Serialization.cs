@@ -135,12 +135,12 @@ public abstract class CollectionSerializer<T> : ItemSerializer<ICollection<T>>, 
 		ItemSerializer = ser;
 	}
 	
-	protected virtual void PreserializeStep(ICollection<T> tgt) {}
+	protected virtual void PreserializeStep(SerializationContext sc, ICollection<T> tgt) {}
 	public sealed override void SerializePreamble(SerializationContext sc, ICollection<T> tgt) {
-		PreserializeStep(tgt);
+		PreserializeStep(sc,tgt);
 		
 		foreach (T item in tgt) {
-			// dont use SerializeInline because we don't want to register this as a referable object
+			// dont use SerializeInline because we don't want to register this as a referable object yet
 			ItemSerializer.SerializePreamble(sc,item); 
 			break;
 		}

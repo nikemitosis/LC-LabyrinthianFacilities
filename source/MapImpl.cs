@@ -954,7 +954,8 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (m),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(m),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (m),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (m)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (m),
+            new EggGroupSerializer                 <BirdEgg>         (m)
 		);
 		
 		HazardBase[] hazards = m.GetComponentsInChildren<HazardBase>(true);
@@ -973,7 +974,8 @@ public sealed class DGameMapNetworkSerializer : Serializer<DGameMap> {
 			new GrabbableMapObjectNetworkSerializer<Equipment>       (map),
 			new BatteryEquipmentNetworkSerializer  <BatteryEquipment>(map),
 			new GunEquipmentNetworkSerializer      <GunEquipment>    (map),
-			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (map)
+			new BatteryEquipmentNetworkSerializer  <FueledEquipment> (map),
+            new EggGroupNetworkSerializer                            (map)
 		);
 		
 		dc.Consume(sizeof(ushort)).CastInto(out ushort numHazardTypes);
