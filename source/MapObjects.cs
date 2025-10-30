@@ -218,18 +218,13 @@ public abstract class ParentedScrap<ParentType> : ParentedScrapBase where Parent
             }
         }
         
-        public void Invalidate() {
-            this.position = Vector3.zero;
-            this.currentBehaviourStateIndex = -1;
-        }
-        
         public void Save(ParentedScrap<ParentType> owner, ParentType parent) {
             this.owner = owner;
             this.reference = parent;
-            Plugin.LogFatal($"Saving {parent}");
+            Plugin.LogFatal($"Saving {parent.name ?? "null"}");
             if (parent == null) {
                 Plugin.LogFatal($"Invalid parent");
-                this.Invalidate();
+                this.owner.InvalidateParent();
             } else {
                 this.position = parent.transform.position;
                 this.currentBehaviourStateIndex = parent.currentBehaviourStateIndex;
@@ -260,11 +255,12 @@ public abstract class ParentedScrap<ParentType> : ParentedScrapBase where Parent
         }
     }
     
+    protected virtual bool ShouldInitializeParent {get => parent.IsInvalid && this.GetComponentInParent<Moon>() != null;}
     public virtual bool ShouldSpawnParent {
         get => (
             this.IsServer 
             && parent.reference == null 
-            && parent.IsValid
+            && (parent.IsValid || ShouldInitializeParent)
             && this.GetComponentInParent<Moon>() != null
         );
     }
@@ -277,17 +273,6 @@ public abstract class ParentedScrap<ParentType> : ParentedScrapBase where Parent
     }
     protected Parent parent = new Parent();
     
-    protected void OnEnable() {
-        if (ShouldSpawnParent) this.SpawnParent();
-    }
-    
-    protected void OnDisable() {
-		if (ShouldDespawnParent) {
-            this.SaveParent();
-            this.parent.Despawn();
-		}
-	}
-    
     [ClientRpc]
 	protected void SendParentClientRpc(NetworkObjectReference parentNetObj, int behaviourStateIndex) {
 		if (IsServer) return;
@@ -298,14 +283,15 @@ public abstract class ParentedScrap<ParentType> : ParentedScrapBase where Parent
     
     protected abstract void ParentClientInit();
     
-    protected void SpawnParent() {
-        Plugin.LogFatal($"Spawning Parent for {this}");
+    protected IEnumerator SpawnParentCoroutine() {
+        if (ShouldInitializeParent) this.InitializeParent();
         
         this.parent.Spawn();
-        if (this.parent.reference == null) return;
-        
+        if (this.parent.reference == null) yield break;
 		this.ParentClientInit();
-		this.parent.reference.gameObject.AddComponent<DummyFlag>();
+        
+        // give parent frame to spawn
+        yield return null;
 		
         this.SendParent();
 	}
@@ -335,16 +321,27 @@ public abstract class ParentedScrap<ParentType> : ParentedScrapBase where Parent
 			this.InvalidateParent();
         } else if (this.parent.IsInvalid) {
             this.SaveParent();
+            this.parent.Despawn();
         }
     }
     
+    public override void Restore() {
+        base.Restore();
+        if (ShouldSpawnParent) StartCoroutine(SpawnParentCoroutine());
+    }
+    
     public virtual void InvalidateParent() {
-        this.parent.Invalidate();
+        this.parent.position = Vector3.zero;
+        this.parent.currentBehaviourStateIndex = -1;
+    }
+
+    protected virtual void InitializeParent() {
+        this.parent = new Parent(this,this.transform.position,0);
     }
 }
 
 public class Beehive : ParentedScrap<RedLocustBees> {
-	protected override string parentPrefabIdentifier {get => "RedLocustHive";}
+	protected override string parentPrefabIdentifier {get => "RedLocustBees";}
     public override bool ShouldPreserve {get => base.ShouldPreserve && Config.Singleton.SaveHives;}
     
     protected override RedLocustBees FindParent() {
@@ -379,6 +376,7 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
         get => base.ShouldPreserve /* && Config.Singleton.SaveSapsuckerEggs */;
     }
     
+    protected override bool ShouldInitializeParent {get => base.ShouldInitializeParent && NestPos != Vector3.zero;}
     public override bool ShouldSpawnParent   {get => base.ShouldSpawnParent   && this == eggGroup[0];}
     public override bool ShouldDespawnParent {get => base.ShouldDespawnParent && this == eggGroup[0];}
     
@@ -387,7 +385,7 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
     // All clients do this
     public override void SaveParent() {
         base.SaveParent();
-        this.NestPos = parent.reference.birdNest.transform.position;
+        this.NestPos = parent.reference?.birdNest?.transform?.position ?? Vector3.zero;
         if (
             parent.reference == null 
             || parent.reference.eggs[0].GetComponent<BirdEgg>() != this
@@ -433,6 +431,7 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
             Quaternion.Euler(Vector3.zero), 
             RoundManager.Instance.mapPropsContainer.transform
         );
+        ((KiwiBabyItem)this.Grabbable).mamaAI = parent;
     }
     
     // GiantKiwiAI reference sent in this function because SendParentClientRpc may not have executed yet, 
@@ -455,7 +454,17 @@ public class BirdEgg : ParentedScrap<GiantKiwiAI> {
             this.parent.reference.eggs.Remove(this.GetComponent<KiwiBabyItem>());
         }
         this.eggGroup.Remove(this);
+        this.NestPos = Vector3.zero;
         base.InvalidateParent();
+    }
+    
+    protected override void InitializeParent() {
+        this.parent = new Parent(this,this.NestPos,0);
+    }
+
+    public override void Restore() {
+        base.Restore();
+        this.gameObject.AddComponent<DummyFlag>();
     }
 }
 
@@ -702,13 +711,18 @@ public struct MapObjectCollection {
 	) {}
 	public MapObjectCollection(ICollection<GrabbableMapObject> mapObjects) {
 		this.Scrap            = new(mapObjects.Count);
-        this.EggGroups        = new(mapObjects.Count);
-		this.Equipment        = new(mapObjects.Count);
-		this.BatteryEquipment = new(mapObjects.Count);
-		this.GunEquipment     = new(mapObjects.Count);
-		this.FueledEquipment  = new(mapObjects.Count);
+        this.EggGroups        = new(mapObjects.Count/3);
+		this.Equipment        = new();
+		this.BatteryEquipment = new();
+		this.GunEquipment     = new();
+		this.FueledEquipment  = new();
+        List<BirdEgg> orphanedEggs = new();
 		foreach (MapObject mo in mapObjects) {
 			if (mo is BirdEgg egg) {
+                if (egg.NestPos == Vector3.zero) {
+                    orphanedEggs.Add(egg);
+                    continue;
+                }
                 if (egg != egg.EggGroup[0]) continue;
                 EggGroups.Add(egg.EggGroup);
             } else if (mo is Scrap s) {
@@ -725,6 +739,8 @@ public struct MapObjectCollection {
 				Plugin.LogError($"MapObject {mo} is neither Scrap nor Equipment?");
 			}
 		}
+        
+        if (orphanedEggs.Count != 0) EggGroups.Add(orphanedEggs);
 	}
 	
 	public void Serialize(
@@ -737,33 +753,33 @@ public struct MapObjectCollection {
         ISerializer<ICollection<BirdEgg>> eggSer
 	) {
 		sc.Add((ushort)this.Scrap.Count);
-		foreach (var s in this.Scrap) {
-			sc.AddInline(s,ss);
+		foreach (Scrap s in this.Scrap) {
+			sc.AddInline<Scrap>(s,ss);
 		}
 		
 		sc.Add((ushort)this.Equipment.Count);
-		foreach (var eq in this.Equipment) {
-			sc.AddInline(eq,es);
+		foreach (Equipment eq in this.Equipment) {
+			sc.AddInline<Equipment>(eq,es);
 		}
 		
 		sc.Add((ushort)this.BatteryEquipment.Count);
-		foreach (var eq in this.BatteryEquipment) {
-			sc.AddInline(eq,bes);
+		foreach (BatteryEquipment eq in this.BatteryEquipment) {
+			sc.AddInline<BatteryEquipment>(eq,bes);
 		}
 		
 		sc.Add((ushort)this.GunEquipment.Count);
-		foreach (var eq in this.GunEquipment) {
-			sc.AddInline(eq,ges);
+		foreach (GunEquipment eq in this.GunEquipment) {
+			sc.AddInline<GunEquipment>(eq,ges);
 		}
 		
 		sc.Add((ushort)this.FueledEquipment.Count);
-		foreach (var eq in this.FueledEquipment) {
-			sc.AddInline(eq,fes);
+		foreach (FueledEquipment eq in this.FueledEquipment) {
+			sc.AddInline<FueledEquipment>(eq,fes);
 		}
         
         sc.Add((ushort)this.EggGroups.Count);
-        foreach (var eg in this.EggGroups) {
-            sc.AddInline(eg,eggSer);
+        foreach (ICollection<BirdEgg> eg in this.EggGroups) {
+            sc.AddInline<ICollection<BirdEgg>>(eg,eggSer);
         }
 	}
 	
@@ -1064,7 +1080,7 @@ public class EggGroupSerializer<T> : CollectionSerializer<T> where T : BirdEgg {
 		return go.GetComponent<T>();
     }
     
-    public void Finalize(ICollection<T> eggGroup) {
+    public override void Finalize(ICollection<T> eggGroup) {
         foreach (T egg in eggGroup) {
             egg.EggGroup = (List<BirdEgg>)eggGroup;
             egg.NestPos = NestPos;
@@ -1283,7 +1299,7 @@ public class ScrapNetworkSerializer<T> : GrabbableMapObjectNetworkSerializer<T> 
 	}
 }
 
-public class EggGroupNetworkSerializer : Serializer<List<BirdEgg>> {
+public class EggGroupNetworkSerializer : Serializer<ICollection<BirdEgg>> {
     
     protected ScrapNetworkSerializer<BirdEgg> memberSerializer;
     
@@ -1304,28 +1320,41 @@ public class EggGroupNetworkSerializer : Serializer<List<BirdEgg>> {
         }
     } */
     
-    public override void Serialize(SerializationContext sc, List<BirdEgg> eggGroup) {
+    public override void Serialize(SerializationContext sc, ICollection<BirdEgg> eggGroup) {
+        BirdEgg firstEgg; {
+            IEnumerator<BirdEgg> it = eggGroup.GetEnumerator();
+            it.MoveNext();
+            firstEgg = it.Current;
+        }
+        sc.Add(firstEgg.NestPos.x);
+        sc.Add(firstEgg.NestPos.y);
+        sc.Add(firstEgg.NestPos.z);
+        
         sc.Add((byte)eggGroup.Count);
         foreach (BirdEgg egg in eggGroup) {
             memberSerializer.Serialize(sc,egg);
         }
     }
     
-    protected override List<BirdEgg> Deserialize(List<BirdEgg> eggGroup, DeserializationContext dc) {
-        
-        foreach (BirdEgg egg in eggGroup) {
-            egg.EggGroup = eggGroup;
-        }
-        
+    protected override ICollection<BirdEgg> Deserialize(ICollection<BirdEgg> eggGroup, DeserializationContext dc) {
         return eggGroup;
     }
     
-    public override List<BirdEgg> Deserialize(DeserializationContext dc) {
+    public override ICollection<BirdEgg> Deserialize(DeserializationContext dc) {
+        dc.Consume(sizeof(float)).CastInto(out float x);
+        dc.Consume(sizeof(float)).CastInto(out float y);
+        dc.Consume(sizeof(float)).CastInto(out float z);
+        Vector3 nestPos = new Vector3(x,y,z);
+        
         dc.Consume(sizeof(byte)).CastInto(out byte numEggs);
         var rt = new List<BirdEgg>((int)numEggs);
         
         for (byte i=0; i<numEggs; i++) {
-            rt.Add((BirdEgg)dc.ConsumeInline(memberSerializer));
+            BirdEgg egg = (BirdEgg)dc.ConsumeInline(memberSerializer);
+            egg.NestPos = nestPos;
+            egg.EggGroup = rt;
+            
+            rt.Add(egg);
         }
         
         return base.Deserialize(rt,dc);

@@ -21,15 +21,13 @@ public class RespawnBeesPatch {
 	[HarmonyPatch("SpawnHiveNearEnemy")]
 	[HarmonyPrefix]
 	public static bool DontSpawnNewHive(RedLocustBees __instance) {
-        return DummyFlag.Detect(__instance);
+        return !DummyFlag.Detect(__instance);
 	}
 	
 	[HarmonyPatch("Start")]
 	[HarmonyPostfix]
 	public static void SetHasSpawnedHive(RedLocustBees __instance, ref bool ___hasSpawnedHive) {
-		var flag = __instance.GetComponent<DummyFlag>();
-		if (flag == null) return;
-		MonoBehaviour.Destroy(flag);
+		if (!DummyFlag.Destroy(__instance)) return;
 		
 		___hasSpawnedHive = true;
 	}
@@ -60,5 +58,22 @@ public class GiantKiwiSpawn {
         
         ___hasSpawnedEggs = true;
         ___birdNestAmbience = __instance.birdNest.GetComponent<AudioSource>();
+    }
+}
+
+[HarmonyPatch(typeof(KiwiBabyItem))]
+public class KiwiEggSpawn {
+    private static GiantKiwiAI storedMama = null;
+    
+    [HarmonyPatch("Start")]
+    [HarmonyPrefix]
+    public static void DontAdoptNewMama(KiwiBabyItem __instance) {
+        if (DummyFlag.Detect(__instance)) storedMama = __instance.mamaAI;
+    }
+    
+    [HarmonyPatch("Start")]
+    [HarmonyPostfix]
+    public static void ReadoptOldMama(KiwiBabyItem __instance) {
+        if (DummyFlag.Destroy(__instance)) __instance.mamaAI = storedMama;
     }
 }

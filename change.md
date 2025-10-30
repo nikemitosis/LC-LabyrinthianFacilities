@@ -4,11 +4,9 @@
    - Refactored some code involving beehives so eggs could inherit some of their behaviour
  - Removed incompatibility with PathFindingLib/PathFindingLagFix because the mods *might* now be compatible. 
 ## TODO: 
- - Bees are broken :(
- - Sapsuckers not respawning (and maybe neither are their nests?)
+ - Make sure sapsuckers work (takeoff/relanding, reloading the save, w/ multiple sapsuckers, w/ some eggs gone)
  - Make sure new manor tiles are spawning with y-axis vertical
- - Add a way for players to manually specify names of tiles whose z-axis is the vertical
- - Make sure serialization isn't broken
+ - (probably 0.8.1) Add a way for players to manually specify names of tiles whose z-axis is the vertical in the config so people don't necessarily have to wait for me
 
 # 0.7.3
  - Fixed a `NullReferenceException` with `BlacklistedInteriors` bricking the mod

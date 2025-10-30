@@ -677,6 +677,7 @@ public class Moon : MonoBehaviour {
 		if (this.ActiveMap != null) this.ActiveMap.gameObject.SetActive(false);
 		this.ActiveMap = GetMap(tilegen.Flow);
 		this.ActiveMap.gameObject.SetActive(true);
+        yield return null; // allow map to become active (race condition)
 		
 		this.ActiveMap.GenerationCompleteEvent += onComplete;
 		this.ActiveMap.TileInsertionEvent += tilegen.FailedPlacementHandler;
@@ -725,10 +726,18 @@ public class Moon : MonoBehaviour {
 		foreach (Transform child in this.transform) {
 			MapObject mapObj = child.GetComponent<MapObject>();
 			if (mapObj != null) {
-				mapObj.Restore();
+				try {
+                    mapObj.Restore();
+                } catch (Exception ex) {
+                    Plugin.LogError(ex.ToString());
+                }
 			} else {
 				var cruiser = child.GetComponent<Cruiser>();
-				if (cruiser != null) cruiser.Restore();
+				if (cruiser != null) try {
+                    cruiser.Restore();
+                } catch (Exception ex) {
+                    Plugin.LogError(ex.ToString());
+                }
 			}
 		}
 		this.ActiveMap.RestoreMapObjects();

@@ -122,6 +122,8 @@ public abstract class ItemSerializer<T> : IAutocastItemSerializer<T> {
 	public abstract T DeserializePreamble(     DeserializationContext dc);
 	public abstract T DeserializeData    (T rt,DeserializationContext dc); 
 	// ^ return value is not going ref-equals rt for value types
+    
+    public virtual void Finalize(T tgt) {}
 }
 
 // Intended to be used if you have several elements with the same preamble
@@ -253,6 +255,15 @@ public sealed class SerializationContext {
 		return total;
 	}
 	
+    public void AddInline<T>(object tgt, ISerializer<object> ser) {
+        if (!(tgt is T && ser is ISerializer<T>)) {
+            throw new InvalidCastException(
+                $"Tried to use a serializer '{ser.GetType()}' on a '{tgt.GetType()}', which is not compatible"
+            );
+        }
+        AddInline(tgt, ser);
+    }
+    
 	public void AddInline(object tgt, ISerializer<object> ser) {
 		if (Verbose) Plugin.LogDebug($"I 0x{Address:X} | {tgt ?? "null"} | {ser}");
 		if (references.ContainsKey(tgt)) {

@@ -731,7 +731,11 @@ public class DGameMap : GameMap {
 	
 	public void PreserveMapObjects() {
 		foreach (GrabbableMapObject obj in Object.FindObjectsByType<GrabbableMapObject>(FindObjectsSortMode.None)) {
-			obj.Preserve();
+			if (!(obj is ParentedScrapBase)) try {
+                obj.Preserve();
+            } catch (Exception ex) {
+                Plugin.LogError(ex.ToString());
+            }
 		}
 	}
 	
